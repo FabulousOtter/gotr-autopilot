@@ -273,6 +273,18 @@ public interface GotrAutopilotConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showTargetLabel",
+		name = "Label on target",
+		description = "Draw the current step's text above the object, NPC or tile it points at",
+		section = displaySection,
+		position = 7
+	)
+	default boolean showTargetLabel()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "hideGuardianForCells",
 		name = "Hide guardian for cells",
 		description = "Hide the Great Guardian while a cell is to be placed on a tile or barrier, so it cannot be clicked by mistake",
@@ -289,7 +301,7 @@ public interface GotrAutopilotConfig extends Config
 		name = "Steps in chat",
 		description = "Also print each new step as a game message",
 		section = displaySection,
-		position = 7
+		position = 9
 	)
 	default boolean chatSteps()
 	{

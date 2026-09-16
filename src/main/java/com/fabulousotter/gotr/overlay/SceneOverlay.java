@@ -118,7 +118,10 @@ public class SceneOverlay extends Overlay
 		if (npc != null)
 		{
 			modelOutlineRenderer.drawOutline(npc, 3, color, 3);
-			label(graphics, npc.getLocalLocation(), instruction.getHeadline(), color, npc.getLogicalHeight() + 40);
+			if (config.showTargetLabel())
+			{
+				label(graphics, npc.getLocalLocation(), instruction.getHeadline(), color, npc.getLogicalHeight() + 40);
+			}
 			return null;
 		}
 		TileObject object = plugin.getTargetObject();
@@ -128,7 +131,10 @@ public class SceneOverlay extends Overlay
 			if (object != countdownAt)
 			{
 				int height = object instanceof GroundObject ? TILE_LABEL_HEIGHT : OBJECT_LABEL_HEIGHT;
-				label(graphics, object.getLocalLocation(), instruction.getHeadline(), color, height);
+				if (config.showTargetLabel())
+				{
+					label(graphics, object.getLocalLocation(), instruction.getHeadline(), color, height);
+				}
 			}
 			return null;
 		}
@@ -142,7 +148,10 @@ public class SceneOverlay extends Overlay
 				{
 					OverlayUtil.renderPolygon(graphics, poly, color);
 				}
-				label(graphics, lp, instruction.getHeadline(), color, TILE_LABEL_HEIGHT);
+				if (config.showTargetLabel())
+				{
+					label(graphics, lp, instruction.getHeadline(), color, TILE_LABEL_HEIGHT);
+				}
 			}
 		}
 		return null;
@@ -214,7 +223,7 @@ public class SceneOverlay extends Overlay
 		String text = "Starts in " + s.getSecondsToStart() + "s";
 		if (object == plugin.getTargetObject())
 		{
-			text = instruction.getHeadline() + " - " + text;
+			text = config.showTargetLabel() ? instruction.getHeadline() + " - " + text : text;
 		}
 		Color color = s.getSecondsToStart() <= 5 ? config.urgentColor() : config.highlightColor();
 		label(graphics, object.getLocalLocation(), text, color, OBJECT_LABEL_HEIGHT);

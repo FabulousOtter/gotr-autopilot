@@ -1,0 +1,309 @@
+/*
+ * Copyright (c) 2026, FabulousOtter
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package com.fabulousotter.gotr.overlay;
+
+import com.fabulousotter.gotr.GotrAutopilotConfig;
+import com.fabulousotter.gotr.GotrAutopilotPlugin;
+import com.fabulousotter.gotr.plan.Instruction;
+import com.fabulousotter.gotr.plan.Step;
+import com.fabulousotter.gotr.plan.Target;
+import com.fabulousotter.gotr.plan.Urgency;
+import com.fabulousotter.gotr.state.GamePhase;
+import com.fabulousotter.gotr.state.Location;
+import com.fabulousotter.gotr.state.Snapshot;
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Graphics2D;
+import java.awt.Polygon;
+import java.awt.Stroke;
+import java.util.List;
+import java.util.Set;
+import javax.annotation.Nullable;
+import javax.inject.Inject;
+import com.fabulousotter.gotr.model.Altar;
+import java.awt.image.BufferedImage;
+import java.util.EnumMap;
+import java.util.Map;
+import net.runelite.api.Client;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.GameObject;
+import net.runelite.api.GroundObject;
+import net.runelite.api.NPC;
+import net.runelite.api.Perspective;
+import net.runelite.api.Player;
+import net.runelite.api.Point;
+import net.runelite.api.TileObject;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.ui.overlay.outline.ModelOutlineRenderer;
+import net.runelite.client.ui.overlay.Overlay;
+import net.runelite.client.ui.overlay.OverlayLayer;
+import net.runelite.client.ui.overlay.OverlayPosition;
+import net.runelite.client.ui.overlay.OverlayUtil;
+
+public class SceneOverlay extends Overlay
+{
+	private static final Stroke PATH_STROKE = new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+	private static final Stroke CLIMB_STROKE = new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 10f,
+		new float[]{8f, 8f}, 0f);
+	private static final int PATH_ALPHA = 160;
+	private static final int PATH_RESYNC_TILES = 2;
+	private static final int TILE_LABEL_HEIGHT = 40;
+	private static final int OBJECT_LABEL_HEIGHT = 120;
+	// Height above a portal guardian for its rune sprite, clear of the model.
+	private static final int RUNE_ICON_HEIGHT = 260;
+
+	private final Client client;
+	private final GotrAutopilotPlugin plugin;
+	private final GotrAutopilotConfig config;
+	private final ModelOutlineRenderer modelOutlineRenderer;
+	private final ItemManager itemManager;
+	// Rune sprites by altar, fetched once and drawn over the active portal guardians.
+	private final Map<Altar, BufferedImage> runeImages = new EnumMap<>(Altar.class);
+
+	@Inject
+	SceneOverlay(Client client, GotrAutopilotPlugin plugin, GotrAutopilotConfig config, ModelOutlineRenderer modelOutlineRenderer,
+		ItemManager itemManager)
+	{
+		this.itemManager = itemManager;
+		this.client = client;
+		this.plugin = plugin;
+		this.config = config;
+		this.modelOutlineRenderer = modelOutlineRenderer;
+		setPosition(OverlayPosition.DYNAMIC);
+		setLayer(OverlayLayer.ABOVE_SCENE);
+	}
+
+	@Override
+	public Dimension render(Graphics2D graphics)
+	{
+		Instruction instruction = plugin.getInstruction();
+		if (instruction.getStep() == Step.NOT_IN_GAME)
+		{
+			return null;
+		}
+		TileObject countdownAt = drawStartCountdown(graphics, instruction);
+		drawSafeToLeave(graphics);
+		drawActiveAltarRunes(graphics);
+		if (instruction.getTarget() == Target.NONE)
+		{
+			return null;
+		}
+		Color color = instruction.getUrgency() == Urgency.HIGH ? config.urgentColor() : config.highlightColor();
+		drawPath(graphics, plugin.getPath(), color);
+		NPC npc = plugin.getTargetNpc();
+		if (npc != null)
+		{
+			modelOutlineRenderer.drawOutline(npc, 3, color, 3);
+			label(graphics, npc.getLocalLocation(), instruction.getHeadline(), color, npc.getLogicalHeight() + 40);
+			return null;
+		}
+		TileObject object = plugin.getTargetObject();
+		if (object != null)
+		{
+			modelOutlineRenderer.drawOutline(object, 3, color, 3);
+			if (object != countdownAt)
+			{
+				int height = object instanceof GroundObject ? TILE_LABEL_HEIGHT : OBJECT_LABEL_HEIGHT;
+				label(graphics, object.getLocalLocation(), instruction.getHeadline(), color, height);
+			}
+			return null;
+		}
+		if (instruction.getLocation() != null)
+		{
+			LocalPoint lp = LocalPoint.fromWorld(client, instruction.getLocation());
+			if (lp != null)
+			{
+				Polygon poly = Perspective.getCanvasTilePoly(client, lp);
+				if (poly != null)
+				{
+					OverlayUtil.renderPolygon(graphics, poly, color);
+				}
+				label(graphics, lp, instruction.getHeadline(), color, TILE_LABEL_HEIGHT);
+			}
+		}
+		return null;
+	}
+
+	// The rune of each open altar over its portal guardian, so the pair can be read from the
+	// floor without the HUD.
+	private void drawActiveAltarRunes(Graphics2D graphics)
+	{
+		Snapshot s = plugin.getSnapshot();
+		if (s.getPhase() != GamePhase.ACTIVE)
+		{
+			return;
+		}
+		drawRuneOver(graphics, s.getActiveElemental());
+		drawRuneOver(graphics, s.getActiveCatalytic());
+	}
+
+	private void drawRuneOver(Graphics2D graphics, @Nullable Altar altar)
+	{
+		if (altar == null)
+		{
+			return;
+		}
+		GameObject guardian = plugin.getTracker().getPortalGuardians().get(altar);
+		if (guardian == null)
+		{
+			return;
+		}
+		BufferedImage image = runeImages.computeIfAbsent(altar, a -> itemManager.getImage(a.getRuneItemId()));
+		if (image == null)
+		{
+			return;
+		}
+		Point p = Perspective.getCanvasImageLocation(client, guardian.getLocalLocation(), image, RUNE_ICON_HEIGHT);
+		if (p != null)
+		{
+			OverlayUtil.renderImageLocation(graphics, p, image);
+		}
+	}
+
+	private void drawSafeToLeave(Graphics2D graphics)
+	{
+		Snapshot s = plugin.getSnapshot();
+		// Only while still inside: once through the barrier the question is answered.
+		// Points are credited when the rift closes, so a finished round counts even when the
+		// total message was filtered out of chat.
+		boolean credited = s.isPointsCredited() || s.getPhase() == GamePhase.ENDED;
+		if (!credited || s.getPhase() == GamePhase.ACTIVE || s.getLocation() != Location.TEMPLE)
+		{
+			return;
+		}
+		GameObject barrier = plugin.getTracker().getEntranceBarrier();
+		if (barrier != null)
+		{
+			label(graphics, barrier.getLocalLocation(), "Safe to exit", config.highlightColor(), OBJECT_LABEL_HEIGHT);
+		}
+	}
+
+	@Nullable
+	private TileObject drawStartCountdown(Graphics2D graphics, Instruction instruction)
+	{
+		Snapshot s = plugin.getSnapshot();
+		TileObject object = plugin.getCountdownObject();
+		if (object == null || s.getPhase() != GamePhase.COUNTDOWN || s.getSecondsToStart() < 0)
+		{
+			return null;
+		}
+		String text = "Starts in " + s.getSecondsToStart() + "s";
+		if (object == plugin.getTargetObject())
+		{
+			text = instruction.getHeadline() + " - " + text;
+		}
+		Color color = s.getSecondsToStart() <= 5 ? config.urgentColor() : config.highlightColor();
+		label(graphics, object.getLocalLocation(), text, color, OBJECT_LABEL_HEIGHT);
+		return object;
+	}
+
+	private void drawPath(Graphics2D graphics, Pathfinder.Path path, Color color)
+	{
+		Player player = client.getLocalPlayer();
+		if (path.isEmpty() || player == null)
+		{
+			return;
+		}
+		List<WorldPoint> points = path.getPoints();
+		Stroke old = graphics.getStroke();
+		graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), PATH_ALPHA));
+		int plane = player.getWorldView().getPlane();
+		Point prev = Perspective.localToCanvas(client, player.getLocalLocation(), plane);
+		WorldPoint here = WorldPoint.fromLocalInstance(client, player.getLocalLocation());
+		int start = resyncIndex(points, path.getClimbs(), here);
+		for (int i = start; i < points.size(); i++)
+		{
+			WorldPoint wp = points.get(i);
+			LocalPoint lp = LocalPoint.fromWorld(client, wp);
+			if (lp == null)
+			{
+				break;
+			}
+			Point p = Perspective.localToCanvas(client, lp, wp.getPlane());
+			if (p != null && prev != null)
+			{
+				// Only the unskipped first leg can be a player-to-waypoint climb.
+				boolean climb = i == start ? start == 0 && path.getClimbs().contains(-1) : path.getClimbs().contains(i - 1);
+				graphics.setStroke(climb ? CLIMB_STROKE : PATH_STROKE);
+				graphics.drawLine(prev.getX(), prev.getY(), p.getX(), p.getY());
+			}
+			prev = p;
+		}
+		graphics.setStroke(old);
+	}
+
+	// Skip completed walking legs when client movement has advanced beyond the tick snapshot.
+	private static int resyncIndex(List<WorldPoint> points, Set<Integer> climbs, @Nullable WorldPoint here)
+	{
+		if (here == null)
+		{
+			return 0;
+		}
+		int start = 0;
+		double nearest = PATH_RESYNC_TILES;
+		for (int k = 0; k + 1 < points.size(); k++)
+		{
+			if (climbs.contains(k) || climbs.contains(k - 1))
+			{
+				continue;
+			}
+			double d = distanceToLeg(here, points.get(k), points.get(k + 1));
+			if (d <= nearest)
+			{
+				nearest = d;
+				start = k + 1;
+			}
+		}
+		return start;
+	}
+
+	private static double distanceToLeg(WorldPoint p, WorldPoint a, WorldPoint b)
+	{
+		double abx = b.getX() - a.getX();
+		double aby = b.getY() - a.getY();
+		double apx = p.getX() - a.getX();
+		double apy = p.getY() - a.getY();
+		double len = abx * abx + aby * aby;
+		double t = len == 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apy * aby) / len));
+		double dx = apx - t * abx;
+		double dy = apy - t * aby;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	private void label(Graphics2D graphics, @Nullable LocalPoint at, String text, Color color, int height)
+	{
+		if (at == null)
+		{
+			return;
+		}
+		Point p = Perspective.getCanvasTextLocation(client, graphics, at, text, height);
+		if (p != null)
+		{
+			OverlayUtil.renderTextLocation(graphics, p, text, color);
+		}
+	}
+}

@@ -9,3 +9,9 @@ nb-configuration.xml
 nbproject/
 bin/
 .vscode/
+# Unit tests and the simulator stay local; only the dev-client launcher is published.
+src/test/java/com/fabulousotter/gotr/overlay/
+src/test/java/com/fabulousotter/gotr/plan/
+src/test/java/com/fabulousotter/gotr/sim/
+src/test/java/com/fabulousotter/gotr/state/
+src/test/resources/

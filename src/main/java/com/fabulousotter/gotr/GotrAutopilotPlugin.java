@@ -70,7 +70,8 @@ import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldView;
 import net.runelite.client.callback.ClientThread;
-import net.runelite.client.callback.Hooks;
+import net.runelite.client.callback.RenderCallback;
+import net.runelite.client.callback.RenderCallbackManager;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -125,11 +126,18 @@ public class GotrAutopilotPlugin extends Plugin
 	private Notifier notifier;
 
 	@Inject
-	private Hooks hooks;
+	private RenderCallbackManager renderCallbackManager;
 
 	// Skips drawing the Great Guardian while a cell is to be placed on a tile or barrier, so
 	// its large model beside the tiles cannot take the click instead.
-	private final Hooks.RenderableDrawListener drawListener = this::shouldDraw;
+	private final RenderCallback drawListener = new RenderCallback()
+	{
+		@Override
+		public boolean addEntity(Renderable renderable, boolean drawingUi)
+		{
+			return shouldDraw(renderable, drawingUi);
+		}
+	};
 	private boolean hideGuardian;
 
 	@Inject
@@ -181,7 +189,7 @@ public class GotrAutopilotPlugin extends Plugin
 		overlayManager.add(sceneOverlay);
 		overlayManager.add(itemHighlightOverlay);
 		eventBus.register(tracker);
-		hooks.registerRenderableDrawListener(drawListener);
+		renderCallbackManager.register(drawListener);
 		clientThread.invokeLater(tracker::primeFromClient);
 	}
 
@@ -189,7 +197,7 @@ public class GotrAutopilotPlugin extends Plugin
 	protected void shutDown()
 	{
 		eventBus.unregister(tracker);
-		hooks.unregisterRenderableDrawListener(drawListener);
+		renderCallbackManager.unregister(drawListener);
 		hideGuardian = false;
 		overlayManager.remove(instructionOverlay);
 		overlayManager.remove(sceneOverlay);

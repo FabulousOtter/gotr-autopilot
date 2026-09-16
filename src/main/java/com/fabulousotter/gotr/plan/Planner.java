@@ -29,7 +29,6 @@ import com.fabulousotter.gotr.model.Altar;
 import com.fabulousotter.gotr.model.CellTier;
 import com.fabulousotter.gotr.model.CombinationRune;
 import com.fabulousotter.gotr.state.BarrierState;
-import com.fabulousotter.gotr.state.GamePhase;
 import com.fabulousotter.gotr.state.Location;
 import com.fabulousotter.gotr.state.PouchState;
 import com.fabulousotter.gotr.state.Snapshot;

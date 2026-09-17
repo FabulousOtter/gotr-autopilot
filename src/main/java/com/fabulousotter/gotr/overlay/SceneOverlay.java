@@ -83,6 +83,7 @@ public class SceneOverlay extends Overlay
 	private final ItemManager itemManager;
 	// Rune sprites by altar, fetched once and drawn over the active portal guardians.
 	private final Map<Altar, BufferedImage> runeImages = new EnumMap<>(Altar.class);
+	private final Map<Altar, BufferedImage> talismanImages = new EnumMap<>(Altar.class);
 
 	@Inject
 	SceneOverlay(Client client, GotrAutopilotPlugin plugin, GotrAutopilotConfig config, ModelOutlineRenderer modelOutlineRenderer,
@@ -166,23 +167,28 @@ public class SceneOverlay extends Overlay
 		{
 			return;
 		}
-		drawRuneOver(graphics, s.getActiveElemental());
-		drawRuneOver(graphics, s.getActiveCatalytic());
+		drawRuneOver(graphics, s.getActiveElemental(), s.getTalismans());
+		drawRuneOver(graphics, s.getActiveCatalytic(), s.getTalismans());
+		// A talisman in the bag opens its altar regardless of the rotation: it takes the rune's place.
+		for (Altar altar : s.getTalismans())
+		{
+			drawOverGuardian(graphics, altar, talismanImages.computeIfAbsent(altar, a -> itemManager.getImage(a.getTalismanItemId())));
+		}
 	}
 
-	private void drawRuneOver(Graphics2D graphics, @Nullable Altar altar)
+	private void drawRuneOver(Graphics2D graphics, @Nullable Altar altar, Set<Altar> talismans)
 	{
-		if (altar == null)
+		if (altar == null || talismans.contains(altar))
 		{
 			return;
 		}
+		drawOverGuardian(graphics, altar, runeImages.computeIfAbsent(altar, a -> itemManager.getImage(a.getRuneItemId())));
+	}
+
+	private void drawOverGuardian(Graphics2D graphics, Altar altar, @Nullable BufferedImage image)
+	{
 		GameObject guardian = plugin.getTracker().getPortalGuardians().get(altar);
-		if (guardian == null)
-		{
-			return;
-		}
-		BufferedImage image = runeImages.computeIfAbsent(altar, a -> itemManager.getImage(a.getRuneItemId()));
-		if (image == null)
+		if (guardian == null || image == null)
 		{
 			return;
 		}
@@ -238,11 +244,15 @@ public class SceneOverlay extends Overlay
 			return;
 		}
 		List<WorldPoint> points = path.getPoints();
+		WorldPoint here = WorldPoint.fromLocalInstance(client, player.getLocalLocation());
+		if (here != null && withinOneTile(here, points.get(points.size() - 1)))
+		{
+			return;
+		}
 		Stroke old = graphics.getStroke();
 		graphics.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(), PATH_ALPHA));
 		int plane = player.getWorldView().getPlane();
 		Point prev = Perspective.localToCanvas(client, player.getLocalLocation(), plane);
-		WorldPoint here = WorldPoint.fromLocalInstance(client, player.getLocalLocation());
 		int start = resyncIndex(points, path.getClimbs(), here);
 		for (int i = start; i < points.size(); i++)
 		{
@@ -263,6 +273,11 @@ public class SceneOverlay extends Overlay
 			prev = p;
 		}
 		graphics.setStroke(old);
+	}
+
+	private static boolean withinOneTile(WorldPoint a, WorldPoint b)
+	{
+		return a.getPlane() == b.getPlane() && Math.abs(a.getX() - b.getX()) <= 1 && Math.abs(a.getY() - b.getY()) <= 1;
 	}
 
 	// Skip completed walking legs when client movement has advanced beyond the tick snapshot.

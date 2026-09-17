@@ -202,7 +202,7 @@ public class Pathfinder
 			nodes.add(new Node(at, WorldPoint.fromScene(fieldView, at / size, at % size, fieldPlane), false, hop && !anchored));
 			if (anchored)
 			{
-				boolean up = transport.getBottom().contains(tileKey(from / size, from % size));
+				boolean up = transport.getTop().contains(tileKey(at / size, at % size));
 				WorldPoint far = up ? transport.getTopAnchor() : transport.getBottomAnchor();
 				WorldPoint near = up ? transport.getBottomAnchor() : transport.getTopAnchor();
 				nodes.add(new Node(-1, far, true, true));
@@ -218,6 +218,11 @@ public class Pathfinder
 		}
 		pathGoal = goal;
 		path = toPath(nodes);
+		// A single blocked tile is still where the player is going: end the line on it.
+		if (minX == maxX && minY == maxY && goal != minX * size + minY)
+		{
+			path = path.endingAt(WorldPoint.fromScene(fieldView, minX, minY, fieldPlane));
+		}
 		return path;
 	}
 
@@ -466,13 +471,19 @@ public class Pathfinder
 		queueTail = 0;
 		queue[queueTail++] = startIdx;
 		int[][] flags = fieldFlags;
-		// Keep transport endpoints paired.
+		// Keep transport endpoints paired. A shortcut is usable from any tile beside one of its
+		// end tiles: the ends themselves often sit inside the blocked rubble, so requiring the
+		// player to stand on one would make the shortcut one-way.
 		List<List<Integer>> bottomTiles = new ArrayList<>();
 		List<List<Integer>> topTiles = new ArrayList<>();
+		List<boolean[]> nearBottom = new ArrayList<>();
+		List<boolean[]> nearTop = new ArrayList<>();
 		for (Transport transport : transports)
 		{
 			bottomTiles.add(sceneIndices(transport.getBottom()));
 			topTiles.add(sceneIndices(transport.getTop()));
+			nearBottom.add(approaches(transport.getBottom()));
+			nearTop.add(approaches(transport.getTop()));
 		}
 		while (head < queueTail)
 		{
@@ -500,15 +511,13 @@ public class Pathfinder
 			{
 				step(flags, cur, cx + 1, cy + 1, NE, d);
 			}
-			int here = tileKey(cx, cy);
 			for (int g = 0; g < transports.size(); g++)
 			{
-				Transport transport = transports.get(g);
-				if (transport.getBottom().contains(here))
+				if (nearBottom.get(g)[cur])
 				{
 					hop(cur, topTiles.get(g), g + 1);
 				}
-				if (transport.getTop().contains(here))
+				if (nearTop.get(g)[cur])
 				{
 					hop(cur, bottomTiles.get(g), g + 1);
 				}
@@ -532,6 +541,28 @@ public class Pathfinder
 				queue[queueTail++] = other;
 			}
 		}
+	}
+
+	// The end tiles and every tile touching them, as a lookup by scene index.
+	private boolean[] approaches(Set<Integer> tileKeys)
+	{
+		boolean[] near = new boolean[size * size];
+		for (int key : tileKeys)
+		{
+			int tx = key >> 8;
+			int ty = key & 0xff;
+			for (int x = tx - 1; x <= tx + 1; x++)
+			{
+				for (int y = ty - 1; y <= ty + 1; y++)
+				{
+					if (x >= 0 && y >= 0 && x < size && y < size)
+					{
+						near[x * size + y] = true;
+					}
+				}
+			}
+		}
+		return near;
 	}
 
 	private List<Integer> sceneIndices(Set<Integer> tileKeys)

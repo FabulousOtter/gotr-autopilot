@@ -240,6 +240,12 @@ public class StateTracker
 	private Altar altarRoom;
 	@Getter
 	private NPC greatGuardian;
+	// The client only keeps NPCs within about 15 tiles, and the guardian never moves, so its
+	// position is remembered from the last spawn for use from the far side of the temple.
+	@Getter
+	private WorldPoint greatGuardianCentre;
+	@Getter
+	private int greatGuardianSize;
 	// The Rewards Guardian in the waiting area outside the barrier.
 	private NPC rewardTrader;
 	@Getter
@@ -329,6 +335,8 @@ public class StateTracker
 		altarExits.clear();
 		altarRoom = null;
 		greatGuardian = null;
+		greatGuardianCentre = null;
+		greatGuardianSize = 0;
 		rewardTrader = null;
 		cordelia = null;
 		cellTiles.clear();
@@ -828,6 +836,8 @@ public class StateTracker
 		if (id == NpcID.GOTR_GREAT_GUARDIAN)
 		{
 			greatGuardian = npc;
+			greatGuardianCentre = npc.getWorldLocation();
+			greatGuardianSize = npc.getComposition() == null ? 1 : Math.max(1, npc.getComposition().getSize());
 		}
 		else if (CORDELIA_NPCS.contains(id))
 		{

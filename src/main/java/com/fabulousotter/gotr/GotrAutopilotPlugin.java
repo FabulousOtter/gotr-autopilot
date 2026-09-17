@@ -90,7 +90,11 @@ public class GotrAutopilotPlugin extends Plugin
 {
 	private static final Instruction NOT_IN_GAME = Instruction.builder().step(Step.NOT_IN_GAME).headline("").build();
 	private static final int SHORTCUT_AGILITY_LEVEL = 56;
-	private static final int CENTRE_WAIT_SEARCH_TILES = 4;
+	private static final int CENTRE_WAIT_SEARCH_TILES = 8;
+	// Ticks the previous altar instruction is kept after its talisman is spent, covering the
+	// fade before the client reports the altar room.
+	private static final int TALISMAN_FADE_TICKS = 5;
+	private static final int[] CENTRE_WAIT_COLUMNS = {0, -1, 1, -2, 2};
 	private static final int CENTRE_WAIT_BLOCKED = CollisionDataFlag.BLOCK_MOVEMENT_FULL
 		| CollisionDataFlag.BLOCK_MOVEMENT_FLOOR | CollisionDataFlag.BLOCK_MOVEMENT_OBJECT
 		| CollisionDataFlag.BLOCK_MOVEMENT_FLOOR_DECORATION;
@@ -177,6 +181,8 @@ public class GotrAutopilotPlugin extends Plugin
 	private Altar lastAltar;
 	private WorldPoint lastTile;
 	private int stepStartTick;
+	private Step pathLoggedStep;
+	private int talismanHoldUntil = -1;
 	private boolean hintArrowSet;
 	private int sceneVersion = -1;
 	private boolean canUseShortcuts;
@@ -266,9 +272,12 @@ public class GotrAutopilotPlugin extends Plugin
 				.build();
 		}
 		Instruction next = planner.plan(s, settingsFor(s));
+		next = holdThroughTalismanFade(s, next);
 		if (next.getTarget() == Target.CENTRE_WAIT)
 		{
-			next = next.toBuilder().location(centreWaitTile()).build();
+			// With no reachable wait tile, the guardian itself is the destination.
+			WorldPoint wait = centreWaitTile();
+			next = next.toBuilder().location(wait != null ? wait : tracker.getGreatGuardianCentre()).build();
 		}
 		lastTile = next.getTarget() == Target.CELL_TILE || next.getTarget() == Target.BARRIER ? next.getLocation() : null;
 		snapshot = s;
@@ -294,11 +303,16 @@ public class GotrAutopilotPlugin extends Plugin
 		path = config.showPath() ? computePath(next) : Pathfinder.Path.EMPTY;
 		hideGuardian = config.hideGuardianForCells()
 			&& (next.getTarget() == Target.CELL_TILE || next.getTarget() == Target.BARRIER);
-		if (config.showPath() && path.isEmpty() && next.getTarget() != Target.NONE && client.getTickCount() % 50 == 0)
+		boolean noPath = config.showPath() && path.isEmpty() && next.getTarget() != Target.NONE;
+		// Once per step, then every 30 s while it persists.
+		if (noPath && (next.getStep() != pathLoggedStep || client.getTickCount() % 50 == 0))
 		{
-			log.debug("No path to {} (shortcuts {}, transport groups {}, agility {})", next.getTarget(),
-				tracker.getShortcuts().size(), transports.size(), client.getRealSkillLevel(Skill.AGILITY));
+			Player me = client.getLocalPlayer();
+			log.debug("No path to {} at {} from {} (npc {}, object {}, shortcuts {}, transport groups {}, agility {})",
+				next.getTarget(), next.getLocation(), me == null ? null : me.getWorldLocation(), targetNpc != null,
+				targetObject != null, tracker.getShortcuts().size(), transports.size(), client.getRealSkillLevel(Skill.AGILITY));
 		}
+		pathLoggedStep = noPath ? next.getStep() : null;
 	}
 
 	// NPC and object bounds are in scene coordinates.
@@ -322,7 +336,7 @@ public class GotrAutopilotPlugin extends Plugin
 			int minX = lp.getSceneX() - (size - 1) / 2;
 			int minY = lp.getSceneY() - (size - 1) / 2;
 			// Approach barriers from the temple side.
-			Point toward = next.getTarget() == Target.BARRIER ? guardianCentre() : null;
+			Point toward = next.getTarget() == Target.BARRIER ? templeCentre() : null;
 			Pathfinder.Path route = pathfinder.pathTo(minX, minY, minX + size - 1, minY + size - 1, transports, toward);
 			return next.getTarget() == Target.BARRIER ? route.endingAt(targetNpc.getWorldLocation()) : route;
 		}
@@ -332,6 +346,11 @@ public class GotrAutopilotPlugin extends Plugin
 			Point min = object.getSceneMinLocation();
 			Point max = object.getSceneMaxLocation();
 			return pathfinder.pathTo(min.getX(), min.getY(), max.getX(), max.getY(), transports);
+		}
+		if (aimedAtGuardian(next))
+		{
+			int[] box = guardianFootprint();
+			return box == null ? Pathfinder.Path.EMPTY : pathfinder.pathTo(box[0], box[1], box[2], box[3], transports);
 		}
 		WorldPoint at = next.getLocation();
 		if (at == null && targetObject != null)
@@ -347,18 +366,40 @@ public class GotrAutopilotPlugin extends Plugin
 		{
 			return Pathfinder.Path.EMPTY;
 		}
-		Point toward = next.getTarget() == Target.CELL_TILE ? guardianCentre() : null;
+		Point toward = next.getTarget() == Target.CELL_TILE ? templeCentre() : null;
 		Pathfinder.Path route = pathfinder.pathTo(lp.getSceneX(), lp.getSceneY(), lp.getSceneX(), lp.getSceneY(), transports, toward);
 		return next.getTarget() == Target.CELL_TILE ? route.endingAt(at) : route;
+	}
+
+	/**
+	 * Using a talisman consumes it a few ticks before the client reports the altar room. Without
+	 * it, the chooser would send the player to another open altar mid-fade, so the instruction
+	 * that was being followed is kept for those ticks.
+	 */
+	private Instruction holdThroughTalismanFade(Snapshot s, Instruction next)
+	{
+		int tick = client.getTickCount();
+		boolean spent = lastStep == Step.GO_TO_ALTAR && lastAltar != null
+			&& snapshot.getTalismans().contains(lastAltar) && !s.getTalismans().contains(lastAltar);
+		if (spent)
+		{
+			talismanHoldUntil = tick + TALISMAN_FADE_TICKS;
+		}
+		boolean sameAltar = next.getStep() == Step.GO_TO_ALTAR && next.getAltar() == lastAltar;
+		if (tick < talismanHoldUntil && s.getLocation() == Location.TEMPLE && !sameAltar && instruction.getStep() == Step.GO_TO_ALTAR)
+		{
+			return instruction;
+		}
+		return next;
 	}
 
 	// Use a walkable tile outside the guardian footprint.
 	@Nullable
 	private WorldPoint centreWaitTile()
 	{
-		NPC guardian = tracker.getGreatGuardian();
+		int[] box = guardianFootprint();
 		Player player = client.getLocalPlayer();
-		if (guardian == null || guardian.getLocalLocation() == null || player == null)
+		if (box == null || player == null)
 		{
 			return null;
 		}
@@ -370,33 +411,112 @@ public class GotrAutopilotPlugin extends Plugin
 			return null;
 		}
 		int[][] flags = maps[plane].getFlags();
-		int size = npcSize(guardian);
-		int minY = guardian.getLocalLocation().getSceneY() - (size - 1) / 2;
-		int x = guardian.getLocalLocation().getSceneX() - (size - 1) / 2 + size / 2;
+		int minY = box[1];
+		int midX = (box[0] + box[2]) / 2;
+		// Nearest row first, the middle column first within it.
 		for (int dy = 1; dy <= CENTRE_WAIT_SEARCH_TILES; dy++)
 		{
 			int y = minY - dy;
-			if (x < 0 || y < 0 || x >= flags.length || y >= flags[x].length)
+			for (int dx : CENTRE_WAIT_COLUMNS)
 			{
-				return null;
-			}
-			if ((flags[x][y] & CENTRE_WAIT_BLOCKED) == 0)
-			{
-				return WorldPoint.fromScene(wv, x, y, plane);
+				int x = midX + dx;
+				if (x < 0 || y < 0 || x >= flags.length || y >= flags[x].length)
+				{
+					continue;
+				}
+				// Walkable by its flags and actually reachable from where the player stands.
+				if ((flags[x][y] & CENTRE_WAIT_BLOCKED) == 0 && pathfinder.distanceTo(x, y, x, y, transports) >= 0)
+				{
+					return WorldPoint.fromScene(wv, x, y, plane);
+				}
 			}
 		}
+		log.debug("No reachable tile south of the Great Guardian; routing to the guardian instead");
 		return null;
+	}
+
+	/**
+	 * The middle of the temple, as the centroid of the ring of cell tiles: the side a barrier
+	 * is approached from. The guardian stands at the north edge, so it is the wrong reference
+	 * for barriers on the east and west, and is used only when no cell tiles are known.
+	 */
+	@Nullable
+	private Point templeCentre()
+	{
+		Player player = client.getLocalPlayer();
+		Set<WorldPoint> tiles = tracker.getCellTiles().keySet();
+		if (player == null || tiles.isEmpty())
+		{
+			return guardianCentre();
+		}
+		long sx = 0;
+		long sy = 0;
+		int n = 0;
+		for (WorldPoint tile : tiles)
+		{
+			LocalPoint lp = LocalPoint.fromWorld(player.getWorldView(), tile);
+			if (lp != null)
+			{
+				sx += lp.getSceneX();
+				sy += lp.getSceneY();
+				n++;
+			}
+		}
+		return n == 0 ? guardianCentre() : new Point((int) Math.round((double) sx / n), (int) Math.round((double) sy / n));
 	}
 
 	@Nullable
 	private Point guardianCentre()
 	{
+		int[] box = guardianFootprint();
+		return box == null ? null : new Point((box[0] + box[2]) / 2, (box[1] + box[3]) / 2);
+	}
+
+	/**
+	 * The Great Guardian's footprint in scene coordinates as {minX, minY, maxX, maxY}: from
+	 * the live NPC when the client has it, otherwise from where it was last seen, since the
+	 * client drops NPCs beyond about 15 tiles and the guardian never moves.
+	 */
+	@Nullable
+	private int[] guardianFootprint()
+	{
 		NPC guardian = tracker.getGreatGuardian();
-		if (guardian == null || guardian.getLocalLocation() == null)
+		int size;
+		int cx;
+		int cy;
+		if (guardian != null && guardian.getLocalLocation() != null)
 		{
-			return null;
+			size = npcSize(guardian);
+			cx = guardian.getLocalLocation().getSceneX();
+			cy = guardian.getLocalLocation().getSceneY();
 		}
-		return new Point(guardian.getLocalLocation().getSceneX(), guardian.getLocalLocation().getSceneY());
+		else
+		{
+			Player player = client.getLocalPlayer();
+			WorldPoint centre = tracker.getGreatGuardianCentre();
+			LocalPoint lp = player == null || centre == null ? null : LocalPoint.fromWorld(player.getWorldView(), centre);
+			if (lp == null)
+			{
+				return null;
+			}
+			size = Math.max(1, tracker.getGreatGuardianSize());
+			cx = lp.getSceneX();
+			cy = lp.getSceneY();
+		}
+		int minX = cx - (size - 1) / 2;
+		int minY = cy - (size - 1) / 2;
+		return new int[]{minX, minY, minX + size - 1, minY + size - 1};
+	}
+
+	// The guardian's footprint is the destination, whether named directly or as the centre wait.
+	private boolean aimedAtGuardian(Instruction next)
+	{
+		if (next.getTarget() == Target.GREAT_GUARDIAN)
+		{
+			return true;
+		}
+		return next.getTarget() == Target.CENTRE_WAIT && next.getLocation() != null
+			&& next.getLocation().equals(tracker.getGreatGuardianCentre());
 	}
 
 	private static int npcSize(NPC npc)
@@ -415,13 +535,10 @@ public class GotrAutopilotPlugin extends Plugin
 		putDistance(out, Target.GUARDIAN_REMAINS, nearest(tracker.getPartsRemains()));
 		putDistance(out, Target.GUARDIAN_REMAINS_ENTRANCE, southmost(tracker.getPartsRemains()));
 		putDistance(out, Target.PORTAL, tracker.getPortal());
-		NPC greatGuardian = tracker.getGreatGuardian();
-		if (greatGuardian != null && greatGuardian.getLocalLocation() != null)
+		int[] box = guardianFootprint();
+		if (box != null)
 		{
-			int size = npcSize(greatGuardian);
-			int minX = greatGuardian.getLocalLocation().getSceneX() - (size - 1) / 2;
-			int minY = greatGuardian.getLocalLocation().getSceneY() - (size - 1) / 2;
-			int d = pathfinder.distanceTo(minX, minY, minX + size - 1, minY + size - 1, transports);
+			int d = pathfinder.distanceTo(box[0], box[1], box[2], box[3], transports);
 			if (d >= 0)
 			{
 				out.put(Target.GREAT_GUARDIAN, d);
@@ -623,7 +740,10 @@ public class GotrAutopilotPlugin extends Plugin
 		{
 			return;
 		}
-		if (next.getUrgency() != Urgency.INFO && afterLongStint)
+		// A quiet step still earns a ping when it sends the player somewhere, such as the
+		// walk to the centre for the altars; only a stay-put wait is silent.
+		boolean actionable = next.getUrgency() != Urgency.INFO || next.getTarget() != Target.NONE;
+		if (actionable && afterLongStint)
 		{
 			notifier.notify(config.notification(), next.getHeadline());
 		}
@@ -700,6 +820,8 @@ public class GotrAutopilotPlugin extends Plugin
 		{
 			case GREAT_GUARDIAN:
 				return tracker.getGreatGuardian();
+			case CENTRE_WAIT:
+				return aimedAtGuardian(i) ? tracker.getGreatGuardian() : null;
 			case APPRENTICE_CORDELIA:
 				return tracker.getCordelia();
 			case BARRIER:

@@ -63,6 +63,15 @@ public class Planner
 	private static final int GRACE_MARGIN_SECONDS = 20;
 	private static final int DROP_ESSENCE_WAIT_SECONDS = 30;
 	private static final int SPARE_CELL_TILES = 10;
+	/** Smallest load worth an altar trip squeezed in before the last portal of the round. */
+	private static final int MIN_PRE_PORTAL_TRIP = 15;
+	/** Shortest stint at the parts worth walking over for while the altars are closed. */
+	private static final int MIN_PARTS_STINT_SECONDS = 10;
+	/** Seconds before the game starts at which the plan moves to the remains regardless of cells. */
+	private static final int POSITION_SECONDS = 10;
+	/** Portal cadence and the time one costs: the walk in, the 30 s inside and the altar trip for the essence. */
+	private static final int PORTAL_INTERVAL_SECONDS = 140;
+	private static final int PORTAL_VISIT_SECONDS = 40;
 
 	public Instruction plan(Snapshot s, PlannerSettings c)
 	{
@@ -144,13 +153,15 @@ public class Planner
 			return Instruction.builder().step(Step.PRE_TAKE_CELLS).headline("Collect uncharged cells")
 				.detail(when).target(Target.UNCHARGED_CELL_TABLE).build();
 		}
+		// In the final seconds stop collecting or spending a cell and head to the remains.
+		boolean positioning = t >= 0 && t <= POSITION_SECONDS;
 		boolean cellReachable = t < 0 || t >= 15 || walkSeconds(s, Target.WEAK_CELL_TABLE, 0) <= t;
-		if (s.getChargedCell() == null && s.isWeakCellTablePresent() && cellReachable)
+		if (!positioning && s.getChargedCell() == null && s.isWeakCellTablePresent() && cellReachable)
 		{
 			return Instruction.builder().step(Step.PRE_TAKE_WEAK_CELL).headline("Collect a weak cell")
 				.detail(when).target(Target.WEAK_CELL_TABLE).build();
 		}
-		if (s.getChargedCell() != null)
+		if (!positioning && s.getChargedCell() != null)
 		{
 			Instruction spend = spendCellBeforeGame(s, c, when);
 			if (spend != null)
@@ -161,7 +172,7 @@ public class Planner
 		// Use the opening target when positioning, not the current top-up size.
 		Target remains = miningTarget(s, c.getOpeningFragmentTarget());
 		return Instruction.builder().step(Step.PRE_POSITION)
-			.headline(t >= 0 && t <= 10 ? "Get ready to mine" : "Wait by the " + (remains == Target.LARGE_REMAINS ? "large remains" : "remains"))
+			.headline(positioning ? "Get ready to mine" : "Wait by the " + (remains == Target.LARGE_REMAINS ? "large remains" : "remains"))
 			.detail(when).target(remains).urgency(Urgency.INFO).build();
 	}
 
@@ -293,7 +304,13 @@ public class Planner
 	@Nullable
 	private Instruction graceResupply(Snapshot s)
 	{
-		int left = s.getPortalSecondsRemaining() >= 0 ? s.getPortalSecondsRemaining() : 30;
+		return graceResupply(s, s.getPortalSecondsRemaining() >= 0 ? s.getPortalSecondsRemaining() : 30);
+	}
+
+	/** Next-round resupply that fits in {@code left} seconds before the portal must be entered. */
+	@Nullable
+	private Instruction graceResupply(Snapshot s, int left)
+	{
 		int budget = left - walkSeconds(s, Target.PORTAL, 15) - 3;
 		if (s.hasStones() && walkSeconds(s, Target.GREAT_GUARDIAN, 10) + 2 <= budget)
 		{
@@ -320,7 +337,8 @@ public class Planner
 
 	private Instruction afterStones(Snapshot s, PlannerSettings c)
 	{
-		if (s.getChargedCell() != null)
+		// A cell kept back at the start is spent after the opening run, not on the way out.
+		if (s.getChargedCell() != null && (!openingRunUnderway(s, c) || anyBarrierCritical(s)))
 		{
 			Instruction cell = cellPlan(s, c);
 			if (cell != null)
@@ -369,11 +387,6 @@ public class Planner
 				}
 				return s.getFreeSlots() > 0 ? mineWhileWaitingForAltar(s, c) : waitForAltar(s);
 			}
-		}
-
-		if (s.getDepositableRunes() > 0 && s.getFragments() > 0 && s.getFreeSlots() < s.getFragments())
-		{
-			return depositRunes(s);
 		}
 
 		if (s.getFragments() > 0 && s.capacity() > 0 && (essence == 0 || topUpWorthIt(s, essence) || craftingUnderway(s)))
@@ -446,24 +459,43 @@ public class Planner
 				// An in-progress top-up is interrupted only by the portal or close.
 				if (!missesPortal && !missesClose)
 				{
-					if (s.getDepositableRunes() > 0 && s.getFreeSlots() < craftable)
-					{
-						return depositRunes(s);
-					}
 					return craftEssence(s);
+				}
+				int minWorth = craftingUnderway(s) ? 1 : 3;
+				if (missesPortal && missesClose)
+				{
+					Instruction last = lastPortalOrTrip(s, c, essence, craftable, trip, close);
+					if (last != null)
+					{
+						return last;
+					}
 				}
 				if (!missesPortal && missesClose)
 				{
 					// The whole load does not fit before the close, but part of it may: craft
 					// what the time allows rather than leaving the bench with a few essence.
 					int affordable = (int) Math.floor(Math.max(0, close - trip - walkSeconds(s, Target.WORKBENCH, 10) - 3) / 0.6 * s.getCraftPerTick());
-					int minWorth = craftingUnderway(s) ? 1 : 3;
 					if (affordable >= minWorth)
 					{
-						return Instruction.builder().step(Step.CRAFT_ESSENCE).headline("Craft " + Math.min(affordable, craftable) + " essence, then go")
-							.detail("Rift closes in ~" + close + "s").target(Target.WORKBENCH)
-							.items(FRAGMENT_ITEM).build();
+						return craftSome(s, Math.min(affordable, craftable), "then go", "Rift closes in ~" + close + "s");
 					}
+					if (essence < MIN_TOPUP)
+					{
+						// A trip with a handful of essence is worth less than preparing for the next round.
+						return stayForClose(s, c, close);
+					}
+				}
+				if (missesPortal && !missesClose && essence < MIN_TRIP_ESSENCE)
+				{
+					// A full load is worth missing the portal for, but a few essence are not:
+					// craft for the portal instead and stay near the centre once that is done.
+					int eta = s.getSecondsToNextPortal();
+					int affordable = (int) Math.floor(Math.max(0, eta - walkSeconds(s, Target.WORKBENCH, 10) - 3) / 0.6 * s.getCraftPerTick());
+					if (affordable >= minWorth)
+					{
+						return craftSome(s, Math.min(affordable, craftable), "then take the portal", "Portal in ~" + eta + "s");
+					}
+					return portalPrep(s, c, eta);
 				}
 			}
 			if (close >= 0 && close < trip)
@@ -485,20 +517,27 @@ public class Planner
 			&& (close < 0 || close > portalEta + 30);
 		if (portalSoon)
 		{
+			// The last portal of the round: resupply for the next round before it opens.
+			int trip = (int) Math.round(AltarChooser.tripSeconds(s, Altar.AIR));
+			if (close >= 0 && close < portalEta + PORTAL_VISIT_SECONDS + trip)
+			{
+				Instruction prep = graceResupply(s, portalEta + 30);
+				if (prep != null)
+				{
+					return prep;
+				}
+			}
 			// Exclude the changing walk distance to avoid alternating instructions while moving.
 			int craftSeconds = fragments > 0 ? (int) Math.round(Math.min(fragments, room) / s.getCraftPerTick() * 0.6) : Integer.MAX_VALUE;
+			if (fragments > 0 && s.getDepositableRunes() > 0 && s.getFreeSlots() < Math.min(fragments, room))
+			{
+				craftSeconds += walkSeconds(s, Target.DEPOSIT_POOL, 10) + 3;
+			}
 			if (fragments > 0 && room > 0 && craftSeconds <= portalEta)
 			{
 				return craftEssence(s);
 			}
-			if (portalEta <= c.getPortalWarningSeconds())
-			{
-				return Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Portal opens in ~" + portalEta + "s")
-					.detail("Stay by the Great Guardian").urgency(Urgency.INFO).build();
-			}
-			return Instruction.builder().step(Step.MINE_FRAGMENTS).headline("Mine the guardian parts by the entrance")
-				.detail("Portal in ~" + portalEta + "s")
-				.target(Target.GUARDIAN_REMAINS_ENTRANCE).build();
+			return portalPrep(s, c, portalEta);
 		}
 
 		if (fragments > 0 && room > 0 && (essence == 0 || topUpWorthIt(s, essence) || craftingUnderway(s)))
@@ -510,6 +549,16 @@ public class Planner
 			int craftable = Math.min(fragments, room);
 			int craftSeconds = (int) Math.round(craftable / s.getCraftPerTick() * 0.6) + walkSeconds(s, Target.WORKBENCH, 10);
 			int trip = (int) Math.round(AltarChooser.tripSeconds(s, s.getActiveCatalytic() != null ? s.getActiveCatalytic() : Altar.AIR));
+			int eta = s.getSecondsToNextPortal();
+			boolean portalBlocks = eta >= 0 && eta < craftSeconds + trip && room + craftable >= c.getPortalMinCapacity();
+			if (portalBlocks && close >= 0 && close < craftSeconds + trip + 5)
+			{
+				Instruction last = lastPortalOrTrip(s, c, essence, craftable, trip, close);
+				if (last != null)
+				{
+					return last;
+				}
+			}
 			if (close >= 0 && close < craftSeconds + trip)
 			{
 				int affordable = (int) Math.floor(Math.max(0, close - trip - walkSeconds(s, Target.WORKBENCH, 10) - 3) / 0.6 * s.getCraftPerTick());
@@ -517,25 +566,14 @@ public class Planner
 				{
 					return stayForClose(s, c, close);
 				}
-				return Instruction.builder().step(Step.CRAFT_ESSENCE).headline("Craft " + Math.min(affordable, craftable) + " essence, then go")
-					.detail("Rift closes in ~" + close + "s").target(Target.WORKBENCH)
-					.items(FRAGMENT_ITEM).build();
-			}
-			if (s.getDepositableRunes() > 0 && s.getFreeSlots() < craftable)
-			{
-				return depositRunes(s);
+				return craftSome(s, Math.min(affordable, craftable), "then go", "Rift closes in ~" + close + "s");
 			}
 			int rot = s.getAltarSecondsRemaining();
-			if (!s.isAnyPortalThisGame() && rot >= 0 && rot <= c.getCraftWindowSeconds())
-			{
-				int fit = (int) Math.floor(Math.max(0, rot - walkSeconds(s, Target.WORKBENCH, 10) - 8) / 0.6 * s.getCraftPerTick());
-				if (fit >= c.getMinFragmentsToCraft() && fragments >= c.getMinFragmentsToCraft())
-				{
-					return craftEssence(s);
-				}
-			}
+			// Craft for the next altars once they are within the craft window, but no earlier
+			// than the load needs: with the pouches already full, a short craft can wait.
+			boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8;
 			if (!s.isAnyPortalThisGame() && (fragments >= c.getOpeningFragmentTarget()
-				|| (rot >= 0 && rot <= c.getCraftWindowSeconds() && fragments >= c.getMinFragmentsToCraft())))
+				|| (windowOpen && fragments >= c.getMinFragmentsToCraft())))
 			{
 				return craftEssence(s);
 			}
@@ -552,14 +590,13 @@ public class Planner
 			}
 		}
 
-		int target = s.isAnyPortalThisGame() ? Math.max(room, c.getMinFragmentsToCraft()) : c.getOpeningFragmentTarget();
+		// The opening run is the configured size; later runs mine what the rest of the game
+		// can use, so the remains are visited as few times as possible.
+		boolean opening = !s.isAnyPortalThisGame() && s.getActiveElemental() == null && s.getActiveCatalytic() == null;
+		int target = opening ? c.getOpeningFragmentTarget() : Math.max(room, c.getMinFragmentsToCraft());
 		if (close >= 0)
 		{
-			double rate = miningTarget(s, target - fragments) == Target.LARGE_REMAINS ? s.getFragmentsPerTick() : s.getPartsPerTick();
-			double perFragment = 0.6 / rate + 0.6 / s.getCraftPerTick();
-			int overhead = walkSeconds(s, Target.LARGE_REMAINS, 15) + walkSeconds(s, Target.WORKBENCH, 15)
-				+ (int) Math.round(AltarChooser.tripSeconds(s, Altar.AIR)) + 5;
-			int affordable = (int) Math.floor(Math.max(0, close - overhead) / perFragment);
+			int affordable = fragmentsUntilClose(s, c, target - fragments, close);
 			// Use a higher threshold to start mining than to continue an existing run.
 			int floor = fragments == 0 ? MIN_MINING_LEG : 5;
 			// Use the same hysteresis when leaving next-round preparation.
@@ -571,7 +608,7 @@ public class Planner
 			{
 				return craftEssence(s);
 			}
-			target = Math.min(target, Math.max(5, fragments + affordable));
+			target = opening ? Math.min(target, Math.max(5, fragments + affordable)) : Math.max(5, fragments + affordable);
 		}
 		if (fragments > 0 && room > 0 && (fragments >= target || !miningLegWorthIt(s, target - fragments)))
 		{
@@ -585,6 +622,59 @@ public class Planner
 		Step last = s.getLastStep();
 		return last == Step.DEPOSIT_RUNES || last == Step.PRE_TAKE_CELLS || last == Step.PRE_REPAIR_POUCHES
 			|| last == Step.PRE_POSITION;
+	}
+
+	/**
+	 * How many more fragments can still be mined, crafted and taken to an altar before the
+	 * close. The first inventory load costs one altar trip; each further load costs another,
+	 * and every portal expected before the close takes its visit and its own trip out of
+	 * the budget. Only the walk out and back is measured from the remains, so the answer
+	 * does not shrink with every step taken towards them.
+	 */
+	private static int fragmentsUntilClose(Snapshot s, PlannerSettings c, int needed, int close)
+	{
+		Target remains = miningTarget(s, needed);
+		double rate = remains == Target.LARGE_REMAINS ? s.getFragmentsPerTick() : s.getPartsPerTick();
+		double perFragment = 0.6 / rate + 0.6 / s.getCraftPerTick();
+		int trip = (int) Math.round(AltarChooser.tripSeconds(s, Altar.AIR));
+		int overhead = walkSeconds(s, remains, 15) + returnSeconds(s, remains, 15) + trip + 5;
+		int eta = s.getSecondsToNextPortal();
+		if (eta >= 0)
+		{
+			for (int at = eta; at + PORTAL_VISIT_SECONDS < close; at += PORTAL_INTERVAL_SECONDS)
+			{
+				overhead += PORTAL_VISIT_SECONDS + trip;
+			}
+		}
+		double available = Math.max(0, close - overhead);
+		int load = Math.max(MIN_TOPUP, s.capacity());
+		int first = (int) Math.floor(available / perFragment);
+		if (first <= load)
+		{
+			return first;
+		}
+		return load + (int) Math.floor((available - load * perFragment) / (perFragment + (double) trip / load));
+	}
+
+	/**
+	 * Neither the next portal nor the close leaves time for the whole load and its trip. A trip
+	 * with what can still be crafted and taken to an altar before the portal is worth it if
+	 * that comes to more than a handful; otherwise this portal is the last of the round, so
+	 * the time goes on next-round preparation and the portal is taken. Null means the essence
+	 * already in hand justifies the trip on its own.
+	 */
+	@Nullable
+	private Instruction lastPortalOrTrip(Snapshot s, PlannerSettings c, int essence, int craftable, int trip, int close)
+	{
+		int eta = s.getSecondsToNextPortal();
+		int fit = (int) Math.floor(Math.max(0, eta - trip - walkSeconds(s, Target.WORKBENCH, 10) - 3) / 0.6 * s.getCraftPerTick());
+		int crafted = Math.min(fit, craftable);
+		if (essence + crafted > MIN_PRE_PORTAL_TRIP)
+		{
+			return crafted > 0 ? craftSome(s, crafted, "then go", "Portal in ~" + eta + "s") : null;
+		}
+		Instruction prep = graceResupply(s, eta + 30);
+		return prep != null ? prep : portalPrep(s, c, eta);
 	}
 
 	private Instruction stayForClose(Snapshot s, PlannerSettings c, int close)
@@ -636,6 +726,36 @@ public class Planner
 	{
 		Integer ticks = s.getTravelTicks().get(target);
 		return ticks == null ? defaultSeconds : (int) Math.round(ticks / 2.0 * 0.6);
+	}
+
+	// Seconds from the target back to the workbench.
+	private static int returnSeconds(Snapshot s, Target target, int defaultSeconds)
+	{
+		Integer ticks = s.getReturnTicks().get(target);
+		return ticks == null ? walkSeconds(s, target, defaultSeconds) : (int) Math.round(ticks / 2.0 * 0.6);
+	}
+
+	private Instruction portalPrep(Snapshot s, PlannerSettings c, int portalEta)
+	{
+		if (portalEta <= c.getPortalWarningSeconds())
+		{
+			return Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Portal opens in ~" + portalEta + "s")
+				.detail("Stay by the Great Guardian").urgency(Urgency.INFO).build();
+		}
+		return Instruction.builder().step(Step.MINE_FRAGMENTS).headline("Mine the guardian parts by the entrance")
+			.detail("Portal in ~" + portalEta + "s")
+			.target(Target.GUARDIAN_REMAINS_ENTRANCE).build();
+	}
+
+	// Craft part of the load, filling pouches first when the inventory is full.
+	private Instruction craftSome(Snapshot s, int count, String then, String detail)
+	{
+		Instruction craft = craftEssence(s);
+		if (craft.getStep() != Step.CRAFT_ESSENCE)
+		{
+			return craft;
+		}
+		return craft.toBuilder().headline("Craft " + count + " essence, " + then).detail(detail).build();
 	}
 
 	private Instruction inAltar(Snapshot s, PlannerSettings c)
@@ -755,7 +875,11 @@ public class Planner
 			return null;
 		}
 		int rot = s.getAltarSecondsRemaining();
-		boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && s.getFragments() >= c.getMinFragmentsToCraft();
+		// Craft no earlier than the load needs: with the pouches already full, a short craft can wait.
+		int craftSeconds = (int) Math.round(Math.min(s.getFragments(), s.capacity()) / s.getCraftPerTick() * 0.6)
+			+ walkSeconds(s, Target.WORKBENCH, 10);
+		boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8
+			&& s.getFragments() >= c.getMinFragmentsToCraft();
 		if (windowOpen)
 		{
 			return null;
@@ -854,9 +978,7 @@ public class Planner
 		int rot = s.getAltarSecondsRemaining();
 		if (rot >= 0 && rot <= c.getPortalWarningSeconds())
 		{
-			return Instruction.builder().step(Step.WAIT_FOR_ALTAR).headline("Altars open in " + rot + "s")
-				.detail("Wait in the centre")
-				.target(Target.CENTRE_WAIT).urgency(Urgency.INFO).build();
+			return waitInCentre(rot);
 		}
 		int target = s.isAnyPortalThisGame() ? s.getFragments() + c.getMinFragmentsToCraft()
 			: Math.max(s.getFragments() + c.getMinFragmentsToCraft(), c.getOpeningFragmentTarget());
@@ -865,8 +987,23 @@ public class Planner
 		{
 			remains = Target.GUARDIAN_REMAINS;
 		}
+		// Walking over to the parts for a few seconds of mining is not worth it: head for the
+		// centre instead. Already there, mining continues until the wait proper.
+		int toParts = walkSeconds(s, Target.GUARDIAN_REMAINS, 10);
+		if (remains == Target.GUARDIAN_REMAINS && rot >= 0 && toParts > 1
+			&& rot <= toParts + MIN_PARTS_STINT_SECONDS + c.getPortalWarningSeconds())
+		{
+			return waitInCentre(rot);
+		}
 		return Instruction.builder().step(Step.MINE_FRAGMENTS).headline("Mine while you wait for an altar")
 			.detail(s.getFragments() + " / " + target + " fragments").target(remains).build();
+	}
+
+	private static Instruction waitInCentre(int rot)
+	{
+		return Instruction.builder().step(Step.WAIT_FOR_ALTAR).headline("Altars open in " + rot + "s")
+			.detail("Wait in the centre")
+			.target(Target.CENTRE_WAIT).urgency(Urgency.INFO).build();
 	}
 
 	private Instruction mineFragments(Snapshot s, PlannerSettings c, int target)
@@ -889,6 +1026,10 @@ public class Planner
 				.detail("").target(Target.WORKBENCH).items(pouchesWithSpace(s)).build();
 		}
 		int craftable = Math.min(s.getFragments(), s.capacity());
+		if (s.getDepositableRunes() > 0 && s.getFreeSlots() < craftable)
+		{
+			return depositRunes(s);
+		}
 		return Instruction.builder().step(Step.CRAFT_ESSENCE).headline("Craft essence at the workbench")
 			.detail("")
 			.target(Target.WORKBENCH).items(FRAGMENT_ITEM).build();
@@ -921,14 +1062,27 @@ public class Planner
 		{
 			return false;
 		}
+		return !anyBarrierCritical(s);
+	}
+
+	private static boolean anyBarrierCritical(Snapshot s)
+	{
 		for (BarrierState barrier : s.getBarriers())
 		{
 			if (barrier.getHealthPercent() >= 0 && barrier.getHealthPercent() < 25)
 			{
-				return false;
+				return true;
 			}
 		}
-		return true;
+		return false;
+	}
+
+	// True while the plan was already sending the player out to mine the opening load.
+	private static boolean openingRunUnderway(Snapshot s, PlannerSettings c)
+	{
+		Step last = s.getLastStep();
+		return (last == Step.PRE_POSITION || last == Step.MINE_FRAGMENTS)
+			&& !s.isAnyPortalThisGame() && s.getEssence() == 0 && s.getFragments() < c.getOpeningFragmentTarget();
 	}
 
 	// Target the cell tile; the barrier NPC obscures its own highlight.

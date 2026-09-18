@@ -110,6 +110,12 @@ public class GotrAutopilotPlugin extends Plugin
 		ObjectID.GOTR_AGILITY_SHORTCUT_TOP,
 		ObjectID.GOTR_AGILITY_SHORTCUT_TOP_NOOP
 	);
+	// Tiles read off the temple itself (it is not instanced): where the player stands at each
+	// end of the rubble shortcut and where the large guardian remains are mined from.
+	private static final WorldPoint RUBBLE_TEMPLE_END = new WorldPoint(3633, 9503, 0);
+	private static final WorldPoint RUBBLE_REMAINS_END = new WorldPoint(3637, 9503, 0);
+	private static final WorldPoint LARGE_REMAINS_STAND = new WorldPoint(3639, 9500, 0);
+	private static final int RUBBLE_MATCH_TILES = 4;
 
 	@Inject
 	private Client client;
@@ -343,9 +349,18 @@ public class GotrAutopilotPlugin extends Plugin
 		if (targetObject instanceof GameObject)
 		{
 			GameObject object = (GameObject) targetObject;
+			if (next.getTarget() == Target.LARGE_REMAINS)
+			{
+				LocalPoint stand = LocalPoint.fromWorld(player.getWorldView(), LARGE_REMAINS_STAND);
+				if (stand != null && pathfinder.reachable(stand.getSceneX(), stand.getSceneY(), transports))
+				{
+					return pathfinder.pathOnto(stand.getSceneX(), stand.getSceneY(), transports);
+				}
+			}
 			Point min = object.getSceneMinLocation();
 			Point max = object.getSceneMaxLocation();
-			return pathfinder.pathTo(min.getX(), min.getY(), max.getX(), max.getY(), transports);
+			// Remains can be mined from a diagonal tile, so the route need not go round to a side.
+			return pathfinder.pathTo(min.getX(), min.getY(), max.getX(), max.getY(), transports, null, isRemains(next.getTarget()));
 		}
 		if (aimedAtGuardian(next))
 		{
@@ -366,9 +381,48 @@ public class GotrAutopilotPlugin extends Plugin
 		{
 			return Pathfinder.Path.EMPTY;
 		}
-		Point toward = next.getTarget() == Target.CELL_TILE ? templeCentre() : null;
-		Pathfinder.Path route = pathfinder.pathTo(lp.getSceneX(), lp.getSceneY(), lp.getSceneX(), lp.getSceneY(), transports, toward);
-		return next.getTarget() == Target.CELL_TILE ? route.endingAt(at) : route;
+		if (next.getTarget() == Target.CELL_TILE)
+		{
+			Point stand = standingTile(lp.getSceneX(), lp.getSceneY(), transports);
+			if (stand != null)
+			{
+				return pathfinder.pathOnto(stand.getX(), stand.getY(), transports).endingAt(at);
+			}
+			return pathfinder.pathTo(lp.getSceneX(), lp.getSceneY(), lp.getSceneX(), lp.getSceneY(), transports, templeCentre()).endingAt(at);
+		}
+		return pathfinder.pathTo(lp.getSceneX(), lp.getSceneY(), lp.getSceneX(), lp.getSceneY(), transports, null);
+	}
+
+	/**
+	 * The tile to stand on to use a cell tile: the neighbour straight in from the wall, taken
+	 * as the reachable orthogonal neighbour closest to the temple's centre. The cell tile sits
+	 * in the wall line, so the tile on the temple side is the one the barrier is worked from.
+	 */
+	@Nullable
+	private Point standingTile(int x, int y, List<Pathfinder.Transport> transports)
+	{
+		Point centre = templeCentre();
+		if (centre == null)
+		{
+			return null;
+		}
+		Point best = null;
+		long bestGap = Long.MAX_VALUE;
+		int[][] sides = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+		for (int[] side : sides)
+		{
+			int nx = x + side[0];
+			int ny = y + side[1];
+			long dx = nx - centre.getX();
+			long dy = ny - centre.getY();
+			long gap = dx * dx + dy * dy;
+			if (gap < bestGap && pathfinder.reachable(nx, ny, transports))
+			{
+				bestGap = gap;
+				best = new Point(nx, ny);
+			}
+		}
+		return best;
 	}
 
 	/**
@@ -681,6 +735,19 @@ public class GotrAutopilotPlugin extends Plugin
 			{
 				continue;
 			}
+			if (isTheRubble(cluster))
+			{
+				// The known shortcut: land exactly on the tiles the player stands on at each end,
+				// so the route runs end to end with no step off to the side.
+				Integer templeEnd = sceneKey(RUBBLE_TEMPLE_END);
+				Integer remainsEnd = sceneKey(RUBBLE_REMAINS_END);
+				if (templeEnd != null && remainsEnd != null)
+				{
+					transports.add(new Pathfinder.Transport(ImmutableSet.of(templeEnd), ImmutableSet.of(remainsEnd),
+						RUBBLE_TEMPLE_END, RUBBLE_REMAINS_END));
+					continue;
+				}
+			}
 			if (bottom.isEmpty() || top.isEmpty())
 			{
 				Set<Integer> whole = new HashSet<>();
@@ -696,6 +763,27 @@ public class GotrAutopilotPlugin extends Plugin
 			transports.add(new Pathfinder.Transport(bottom, top, bottomAnchor, topAnchor));
 		}
 		return transports;
+	}
+
+	private static boolean isTheRubble(List<TileObject> cluster)
+	{
+		for (TileObject object : cluster)
+		{
+			WorldPoint at = object.getWorldLocation();
+			if (at.distanceTo2D(RUBBLE_TEMPLE_END) <= RUBBLE_MATCH_TILES || at.distanceTo2D(RUBBLE_REMAINS_END) <= RUBBLE_MATCH_TILES)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Nullable
+	private Integer sceneKey(WorldPoint point)
+	{
+		Player player = client.getLocalPlayer();
+		LocalPoint lp = player == null ? null : LocalPoint.fromWorld(player.getWorldView(), point);
+		return lp == null ? null : Pathfinder.tileKey(lp.getSceneX(), lp.getSceneY());
 	}
 
 	private static void ring(Set<Integer> tiles, TileObject object, int radius)
@@ -836,6 +924,12 @@ public class GotrAutopilotPlugin extends Plugin
 			default:
 				return null;
 		}
+	}
+
+	private static boolean isRemains(Target target)
+	{
+		return target == Target.LARGE_REMAINS || target == Target.GUARDIAN_REMAINS
+			|| target == Target.GUARDIAN_REMAINS_ENTRANCE || target == Target.HUGE_REMAINS;
 	}
 
 	@Nullable

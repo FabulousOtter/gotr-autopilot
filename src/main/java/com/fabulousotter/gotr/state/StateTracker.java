@@ -1236,7 +1236,7 @@ public class StateTracker
 		{
 			CellTier tier = CellTier.fromBarrierNpc(npc.getId());
 			WorldPoint at = npc.getWorldLocation();
-			barriers.add(new BarrierState(at, tier, barrierHealth.getOrDefault(at, -1)));
+			barriers.add(new BarrierState(cellTileNear(at), tier, barrierHealth.getOrDefault(at, -1)));
 		}
 		List<WorldPoint> emptyTiles = new ArrayList<>();
 		List<WorldPoint> brokenTiles = new ArrayList<>();
@@ -1457,6 +1457,27 @@ public class StateTracker
 	}
 
 	@Nullable
+	/**
+	 * The cell tile a barrier stands on. A wide barrier NPC reports its south-west corner,
+	 * which is one tile along the wall from the tile the cell goes on, so the nearest known
+	 * tile is used and the NPC's own location only when none is loaded nearby.
+	 */
+	private WorldPoint cellTileNear(WorldPoint npcAt)
+	{
+		WorldPoint best = npcAt;
+		int bestDist = 3;
+		for (WorldPoint tile : cellTiles.keySet())
+		{
+			int d = tile.distanceTo2D(npcAt);
+			if (d < bestDist)
+			{
+				bestDist = d;
+				best = tile;
+			}
+		}
+		return best;
+	}
+
 	public GameObject getEntranceBarrier()
 	{
 		for (int id : ENTRANCE_BARRIERS)

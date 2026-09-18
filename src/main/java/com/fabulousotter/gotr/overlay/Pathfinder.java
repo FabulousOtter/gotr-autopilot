@@ -172,22 +172,69 @@ public class Pathfinder
 	public Path pathTo(int minX, int minY, int maxX, int maxY, List<Transport> transports,
 		@Nullable Point toward)
 	{
+		return pathTo(minX, minY, maxX, maxY, transports, toward, false);
+	}
+
+	/**
+	 * With corners, the tiles diagonal to the footprint count as well, for objects the
+	 * player can work from a corner such as remains to mine.
+	 */
+	public Path pathTo(int minX, int minY, int maxX, int maxY, List<Transport> transports,
+		@Nullable Point toward, boolean corners)
+	{
 		if (!ensureField(transports))
 		{
 			return Path.EMPTY;
 		}
-		int goal = toward == null ? -1 : nearestRingTile(minX, minY, maxX, maxY, toward);
+		int goal = toward == null ? -1 : nearestRingTile(minX, minY, maxX, maxY, toward, corners);
 		if (goal < 0)
 		{
-			goal = nearestRingTile(minX, minY, maxX, maxY);
+			goal = nearestRingTile(minX, minY, maxX, maxY, null, corners);
 		}
 		if (goal < 0 || dist[goal] == 0)
 		{
 			return Path.EMPTY;
 		}
+		build(goal, transports);
+		// A single blocked tile is still where the player is going: end the line on it. The
+		// extended route is cached so a stationary player gets the same instance each frame.
+		if (minX == maxX && minY == maxY && goal != minX * size + minY)
+		{
+			path = path.endingAt(WorldPoint.fromScene(fieldView, minX, minY, fieldPlane));
+		}
+		return path;
+	}
+
+	/**
+	 * The route onto a walkable tile itself, rather than beside a footprint. Empty when the
+	 * player is already on it or it cannot be reached.
+	 */
+	public Path pathOnto(int x, int y, List<Transport> transports)
+	{
+		if (!ensureField(transports) || x < 0 || y < 0 || x >= size || y >= size)
+		{
+			return Path.EMPTY;
+		}
+		int goal = x * size + y;
+		if (dist[goal] <= 0)
+		{
+			return Path.EMPTY;
+		}
+		build(goal, transports);
+		return path;
+	}
+
+	/** Whether the tile can be walked to, including the tile the player stands on. */
+	public boolean reachable(int x, int y, List<Transport> transports)
+	{
+		return ensureField(transports) && x >= 0 && y >= 0 && x < size && y < size && dist[x * size + y] >= 0;
+	}
+
+	private void build(int goal, List<Transport> transports)
+	{
 		if (goal == pathGoal)
 		{
-			return path;
+			return;
 		}
 		// Preserve shortcut anchors when reconstructing the parent chain.
 		List<Node> nodes = new ArrayList<>();
@@ -199,14 +246,23 @@ public class Pathfinder
 			boolean hop = via[at] > 0 && via[at] <= transports.size();
 			Transport transport = hop ? transports.get(via[at] - 1) : null;
 			boolean anchored = transport != null && transport.getBottomAnchor() != null && transport.getTopAnchor() != null;
-			nodes.add(new Node(at, WorldPoint.fromScene(fieldView, at / size, at % size, fieldPlane), false, hop && !anchored));
+			WorldPoint here = WorldPoint.fromScene(fieldView, at / size, at % size, fieldPlane);
 			if (anchored)
 			{
 				boolean up = transport.getTop().contains(tileKey(at / size, at % size));
 				WorldPoint far = up ? transport.getTopAnchor() : transport.getBottomAnchor();
 				WorldPoint near = up ? transport.getBottomAnchor() : transport.getTopAnchor();
+				// Landing on the anchor tile itself needs no extra point.
+				if (!here.equals(far))
+				{
+					nodes.add(new Node(at, here, false, false));
+				}
 				nodes.add(new Node(-1, far, true, true));
 				nodes.add(new Node(-1, near, true, false));
+			}
+			else
+			{
+				nodes.add(new Node(at, here, false, hop));
 			}
 			at = from;
 		}
@@ -218,12 +274,6 @@ public class Pathfinder
 		}
 		pathGoal = goal;
 		path = toPath(nodes);
-		// A single blocked tile is still where the player is going: end the line on it.
-		if (minX == maxX && minY == maxY && goal != minX * size + minY)
-		{
-			path = path.endingAt(WorldPoint.fromScene(fieldView, minX, minY, fieldPlane));
-		}
-		return path;
 	}
 
 	// Smooth walkable segments without skipping anchors or climbs.
@@ -306,10 +356,10 @@ public class Pathfinder
 	 */
 	private int nearestRingTile(int minX, int minY, int maxX, int maxY)
 	{
-		return nearestRingTile(minX, minY, maxX, maxY, null);
+		return nearestRingTile(minX, minY, maxX, maxY, null, false);
 	}
 
-	private int nearestRingTile(int minX, int minY, int maxX, int maxY, @Nullable Point toward)
+	private int nearestRingTile(int minX, int minY, int maxX, int maxY, @Nullable Point toward, boolean corners)
 	{
 		double centreX = (minX + maxX) / 2.0;
 		double centreY = (minY + maxY) / 2.0;
@@ -329,7 +379,7 @@ public class Pathfinder
 				}
 				boolean outsideX = x < minX || x > maxX;
 				boolean outsideY = y < minY || y > maxY;
-				if (outsideX && outsideY)
+				if (outsideX && outsideY && !corners)
 				{
 					continue;
 				}

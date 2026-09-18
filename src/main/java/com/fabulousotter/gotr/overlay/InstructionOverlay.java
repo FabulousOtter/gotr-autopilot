@@ -34,7 +34,10 @@ import com.fabulousotter.gotr.state.Location;
 import com.fabulousotter.gotr.state.Snapshot;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.Rectangle;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import net.runelite.client.ui.FontManager;
@@ -61,7 +64,6 @@ public class InstructionOverlay extends OverlayPanel
 		this.config = config;
 		setPosition(OverlayPosition.TOP_LEFT);
 		setPriority(PRIORITY_HIGH);
-		panelComponent.setPreferredSize(new Dimension(260, 0));
 	}
 
 	@Override
@@ -72,8 +74,21 @@ public class InstructionOverlay extends OverlayPanel
 		{
 			return null;
 		}
+		boolean compact = config.compactOverlay();
+		Font small = FontManager.getRunescapeSmallFont();
+		panelComponent.setPreferredSize(new Dimension(compact ? 180 : 260, 0));
+		panelComponent.setBorder(compact ? new Rectangle(4, 3, 4, 3) : new Rectangle(5, 5, 5, 5));
+		panelComponent.setGap(new Point(0, compact ? 1 : 0));
 		Color color = instruction.getUrgency() == Urgency.HIGH ? HIGH : instruction.getUrgency() == Urgency.INFO ? INFO : NORMAL;
-		panelComponent.getChildren().add(TitleComponent.builder().text(instruction.getHeadline()).color(color).build());
+		if (compact)
+		{
+			// A line rather than a title so a long headline wraps instead of running off the panel.
+			panelComponent.getChildren().add(LineComponent.builder().left(instruction.getHeadline()).leftColor(color).leftFont(small).build());
+		}
+		else
+		{
+			panelComponent.getChildren().add(TitleComponent.builder().text(instruction.getHeadline()).color(color).build());
+		}
 		if (!detail.equals(instruction.getDetail()))
 		{
 			detail = instruction.getDetail();
@@ -83,16 +98,100 @@ public class InstructionOverlay extends OverlayPanel
 		{
 			if (!part.isEmpty())
 			{
-				panelComponent.getChildren().add(LineComponent.builder().left(part).leftFont(FontManager.getRunescapeSmallFont()).build());
+				panelComponent.getChildren().add(LineComponent.builder().left(part).leftFont(small).build());
 			}
 		}
 		if (config.showTimers())
 		{
-			// A gap between the step's text and the figures below it.
-			panelComponent.getChildren().add(LineComponent.builder().left(" ").build());
-			timers(plugin.getSnapshot());
+			Snapshot s = plugin.getSnapshot();
+			if (compact)
+			{
+				compactTimers(s);
+			}
+			else
+			{
+				// A gap between the step's text and the figures below it.
+				panelComponent.getChildren().add(LineComponent.builder().left(" ").build());
+				timers(s);
+			}
 		}
 		return super.render(graphics);
+	}
+
+	/**
+	 * The timers on two small rows: the game clock and portal on the first, points and
+	 * the cell on the second, with the necklace on a third only while it is worn.
+	 */
+	private void compactTimers(Snapshot s)
+	{
+		String left = null;
+		String right = null;
+		Color rightColor = null;
+		if (s.getPhase() == GamePhase.ACTIVE)
+		{
+			StringBuilder sb = new StringBuilder();
+			if (s.getSecondsSinceStart() >= 0)
+			{
+				sb.append(clock(s.getSecondsSinceStart()));
+			}
+			if (s.getSecondsToClose() >= 0)
+			{
+				sb.append(sb.length() > 0 ? "  " : "").append("closes ~").append(clock(s.getSecondsToClose()));
+			}
+			left = sb.toString();
+			if (s.isPortalOpen())
+			{
+				right = s.getPortalSecondsRemaining() >= 0 ? "portal " + s.getPortalSecondsRemaining() + "s" : "portal open";
+				rightColor = HIGH;
+			}
+			else if (s.getSecondsToNextPortal() >= 0)
+			{
+				right = "portal ~" + s.getSecondsToNextPortal() + "s";
+			}
+		}
+		else if (s.getPhase() == GamePhase.COUNTDOWN && s.getSecondsToStart() >= 0)
+		{
+			left = "starts in " + s.getSecondsToStart() + "s";
+		}
+		else if (s.getLocation() == Location.LOBBY && s.getSecondsToNextGame() >= 0)
+		{
+			left = "next game ~" + clock(s.getSecondsToNextGame());
+		}
+		if (left != null || right != null)
+		{
+			smallLine(left, right, rightColor);
+		}
+		left = s.getSavedElementalPoints() >= 0 || s.getSavedCatalyticPoints() >= 0
+			? "E " + Math.max(0, s.getSavedElementalPoints()) + " / C " + Math.max(0, s.getSavedCatalyticPoints())
+			: null;
+		right = s.getChargedCell() != null ? s.getChargedCell().getLabel() + " cell" : null;
+		if (left != null || right != null)
+		{
+			smallLine(left, right, null);
+		}
+		if (s.isBindingNecklaceWorn())
+		{
+			smallLine("necklace", s.getNecklaceCharges() + " charges", s.getNecklaceCharges() <= 2 ? HIGH : null);
+		}
+	}
+
+	private void smallLine(@Nullable String left, @Nullable String right, @Nullable Color rightColor)
+	{
+		Font small = FontManager.getRunescapeSmallFont();
+		LineComponent.LineComponentBuilder builder = LineComponent.builder().leftFont(small).rightFont(small);
+		if (left != null)
+		{
+			builder.left(left);
+		}
+		if (right != null)
+		{
+			builder.right(right);
+		}
+		if (rightColor != null)
+		{
+			builder.rightColor(rightColor);
+		}
+		panelComponent.getChildren().add(builder.build());
 	}
 
 	private void timers(Snapshot s)

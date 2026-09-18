@@ -273,11 +273,23 @@ public interface GotrAutopilotConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "compactOverlay",
+		name = "Compact overlay",
+		description = "A narrower panel in the small font with the timers folded onto two lines, for fixed and small layouts",
+		section = displaySection,
+		position = 7
+	)
+	default boolean compactOverlay()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "showTargetLabel",
 		name = "Label on target",
 		description = "Draw the current step's text above the object, NPC or tile it points at",
 		section = displaySection,
-		position = 7
+		position = 8
 	)
 	default boolean showTargetLabel()
 	{
@@ -289,7 +301,7 @@ public interface GotrAutopilotConfig extends Config
 		name = "Hide guardian for cells",
 		description = "Hide the Great Guardian while a cell is to be placed on a tile or barrier, so it cannot be clicked by mistake",
 		section = displaySection,
-		position = 8
+		position = 9
 	)
 	default boolean hideGuardianForCells()
 	{
@@ -301,7 +313,7 @@ public interface GotrAutopilotConfig extends Config
 		name = "Steps in chat",
 		description = "Also print each new step as a game message",
 		section = displaySection,
-		position = 9
+		position = 10
 	)
 	default boolean chatSteps()
 	{

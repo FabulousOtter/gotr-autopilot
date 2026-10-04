@@ -24,11 +24,15 @@
  */
 package com.fabulousotter.gotr;
 
+import com.fabulousotter.gotr.model.Alignment;
 import com.fabulousotter.gotr.model.Altar;
 import com.fabulousotter.gotr.overlay.InstructionOverlay;
 import com.fabulousotter.gotr.overlay.ItemHighlightOverlay;
+import com.fabulousotter.gotr.overlay.MagicImbueOverlay;
 import com.fabulousotter.gotr.overlay.Pathfinder;
+import com.fabulousotter.gotr.overlay.PouchRepairOverlay;
 import com.fabulousotter.gotr.overlay.SceneOverlay;
+import com.fabulousotter.gotr.plan.AltarChooser;
 import com.fabulousotter.gotr.plan.Instruction;
 import com.fabulousotter.gotr.plan.Planner;
 import com.fabulousotter.gotr.plan.PlannerSettings;
@@ -59,7 +63,12 @@ import net.runelite.api.CollisionDataFlag;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.GameObject;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.GroundObject;
 import net.runelite.api.NPC;
@@ -163,6 +172,12 @@ public class GotrAutopilotPlugin extends Plugin
 	@Inject
 	private ItemHighlightOverlay itemHighlightOverlay;
 
+	@Inject
+	private MagicImbueOverlay magicImbueOverlay;
+
+	@Inject
+	private PouchRepairOverlay pouchRepairOverlay;
+
 	private final Planner planner = new Planner();
 
 	@Getter
@@ -200,6 +215,8 @@ public class GotrAutopilotPlugin extends Plugin
 		overlayManager.add(instructionOverlay);
 		overlayManager.add(sceneOverlay);
 		overlayManager.add(itemHighlightOverlay);
+		overlayManager.add(magicImbueOverlay);
+		overlayManager.add(pouchRepairOverlay);
 		eventBus.register(tracker);
 		renderCallbackManager.register(drawListener);
 		clientThread.invokeLater(tracker::primeFromClient);
@@ -214,6 +231,8 @@ public class GotrAutopilotPlugin extends Plugin
 		overlayManager.remove(instructionOverlay);
 		overlayManager.remove(sceneOverlay);
 		overlayManager.remove(itemHighlightOverlay);
+		overlayManager.remove(magicImbueOverlay);
+		overlayManager.remove(pouchRepairOverlay);
 		tracker.reset();
 		clearInstruction();
 		pathfinder = null;
@@ -319,6 +338,72 @@ public class GotrAutopilotPlugin extends Plugin
 				targetObject != null, tracker.getShortcuts().size(), transports.size(), client.getRealSkillLevel(Skill.AGILITY));
 		}
 		pathLoggedStep = noPath ? next.getStep() : null;
+	}
+
+	// Deprioritize the plain craft on an elemental altar when a combination rune is possible, so
+	// a left-click there walks instead of wasting the load; the option stays on right-click.
+	@Subscribe
+	public void onMenuEntryAdded(MenuEntryAdded event)
+	{
+		if (!config.comboAltarClickGuard())
+		{
+			return;
+		}
+		Altar altar = Altar.fromAltarObject(event.getIdentifier());
+		if (altar == null || altar.getAlignment() != Alignment.ELEMENTAL
+			|| !"Craft-rune".equals(event.getOption()))
+		{
+			return;
+		}
+		if (comboAvailableAt(altar))
+		{
+			event.getMenuEntry().setDeprioritized(true);
+		}
+	}
+
+	// True when using the base rune on this altar would make a combination rune right now.
+	public boolean comboAvailableAt(@Nullable Altar altar)
+	{
+		return altar != null && snapshot.getLocation() == Location.ALTAR_ROOM
+			&& AltarChooser.combinationAt(altar, snapshot, settingsFor(snapshot)) != null;
+	}
+
+	// While dropping an essence is the step, make Drop the item's default left-click option. The
+	// top of the menu is the last entry, so the Drop entry is moved there.
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		if (!config.dropEssenceLeftClick() || instruction.getStep() != Step.DROP_ESSENCE)
+		{
+			return;
+		}
+		Set<Integer> items = instruction.getItems();
+		MenuEntry[] entries = event.getMenuEntries();
+		for (int i = 0; i < entries.length - 1; i++)
+		{
+			MenuEntry entry = entries[i];
+			if (!"Drop".equals(entry.getOption()) || !isEssenceEntry(entry, items))
+			{
+				continue;
+			}
+			System.arraycopy(entries, i + 1, entries, i, entries.length - i - 1);
+			entries[entries.length - 1] = entry;
+			client.setMenuEntries(entries);
+			return;
+		}
+	}
+
+	// An inventory item op does not always carry its item id, so fall back to the clicked slot's item.
+	private boolean isEssenceEntry(MenuEntry entry, Set<Integer> items)
+	{
+		if (items.contains(entry.getItemId()))
+		{
+			return true;
+		}
+		ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+		return inventory != null && entry.getParam0() >= 0
+			&& entry.getParam0() < inventory.getItems().length
+			&& items.contains(inventory.getItems()[entry.getParam0()].getId());
 	}
 
 	// NPC and object bounds are in scene coordinates.
@@ -816,7 +901,10 @@ public class GotrAutopilotPlugin extends Plugin
 			.baseRune(s.getBaseRune())
 			.balanceWithSavedPoints(config.balanceWithSaved())
 			.maxImbalance(config.maxImbalance())
+			.preferredAltars(config.preferredAltars())
+			.dispreferredAltars(config.dispreferredAltars())
 			.protectRightBarrier(config.protectRightBarrier())
+			.barrierPriority(config.barrierPriority())
 			.portalMinCapacity(config.portalMinCapacity())
 			.build();
 	}

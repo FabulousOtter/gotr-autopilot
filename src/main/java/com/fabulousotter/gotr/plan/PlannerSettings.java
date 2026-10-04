@@ -25,6 +25,8 @@
 package com.fabulousotter.gotr.plan;
 
 import com.fabulousotter.gotr.model.Altar;
+import com.google.common.collect.ImmutableSet;
+import java.util.Set;
 import lombok.Builder;
 import lombok.Value;
 
@@ -51,7 +53,15 @@ public class PlannerSettings
 	@Builder.Default
 	int maxImbalance = 200;
 	@Builder.Default
+	Set<Altar> preferredAltars = ImmutableSet.of();
+	@Builder.Default
+	Set<Altar> dispreferredAltars = ImmutableSet.of();
+	@Builder.Default
+	int pouchRepairLoads = 2;
+	@Builder.Default
 	boolean protectRightBarrier = true;
+	@Builder.Default
+	BarrierPriority barrierPriority = BarrierPriority.LOWEST_HEALTH;
 	@Builder.Default
 	int portalMinCapacity = 10;
 	@Builder.Default

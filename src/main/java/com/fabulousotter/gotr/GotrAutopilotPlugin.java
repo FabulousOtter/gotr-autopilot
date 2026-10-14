@@ -58,8 +58,10 @@ import net.runelite.api.CollisionData;
 import net.runelite.api.CollisionDataFlag;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.GameObject;
+import net.runelite.api.GameState;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.GroundObject;
 import net.runelite.api.NPC;
@@ -246,6 +248,20 @@ public class GotrAutopilotPlugin extends Plugin
 	GotrAutopilotConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(GotrAutopilotConfig.class);
+	}
+
+	// Entering or leaving an altar swaps the scene and unloads what the targets point at, which
+	// the overlay would otherwise go on drawing until the next tick finds them anew.
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOADING)
+		{
+			targetNpc = null;
+			targetObject = null;
+			countdownObject = null;
+			path = Pathfinder.Path.EMPTY;
+		}
 	}
 
 	@Subscribe

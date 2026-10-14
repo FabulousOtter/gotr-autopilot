@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 import com.fabulousotter.gotr.model.Altar;
 import java.awt.image.BufferedImage;
 import java.util.EnumMap;
@@ -64,6 +65,7 @@ import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.OverlayUtil;
 
+@Slf4j
 public class SceneOverlay extends Overlay
 {
 	private static final Stroke PATH_STROKE = new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
@@ -128,7 +130,7 @@ public class SceneOverlay extends Overlay
 		TileObject object = plugin.getTargetObject();
 		if (object != null)
 		{
-			modelOutlineRenderer.drawOutline(object, 3, color, 3);
+			outline(object, color);
 			if (object != countdownAt)
 			{
 				int height = object instanceof GroundObject ? TILE_LABEL_HEIGHT : OBJECT_LABEL_HEIGHT;
@@ -214,6 +216,23 @@ public class SceneOverlay extends Overlay
 		if (barrier != null)
 		{
 			label(graphics, barrier.getLocalLocation(), "Safe to exit", config.highlightColor(), OBJECT_LABEL_HEIGHT);
+		}
+	}
+
+	/**
+	 * The client throws from inside the outline when an object's model is gone, as with an object
+	 * of a scene just left (the plugin drops those when the scene loads). Should one slip through,
+	 * that frame goes without the outline, but keeps the label and leaves no warning in the log.
+	 */
+	private void outline(TileObject object, Color color)
+	{
+		try
+		{
+			modelOutlineRenderer.drawOutline(object, 3, color, 3);
+		}
+		catch (NullPointerException ex)
+		{
+			log.debug("No outline this frame for object {} at {}", object.getId(), object.getWorldLocation());
 		}
 	}
 

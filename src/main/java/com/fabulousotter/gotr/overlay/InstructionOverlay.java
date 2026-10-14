@@ -139,12 +139,7 @@ public class InstructionOverlay extends OverlayPanel
 				sb.append(sb.length() > 0 ? "  " : "").append("closes ~").append(clock(s.getSecondsToClose()));
 			}
 			left = sb.toString();
-			if (s.isPortalOpen())
-			{
-				right = s.getPortalSecondsRemaining() >= 0 ? "portal " + s.getPortalSecondsRemaining() + "s" : "portal open";
-				rightColor = HIGH;
-			}
-			else if (s.getSecondsToNextPortal() >= 0)
+			if (!s.isPortalOpen() && s.getSecondsToNextPortal() >= 0)
 			{
 				right = "portal ~" + s.getSecondsToNextPortal() + "s";
 			}
@@ -156,6 +151,12 @@ public class InstructionOverlay extends OverlayPanel
 		else if (s.getLocation() == Location.LOBBY && s.getSecondsToNextGame() >= 0)
 		{
 			left = "next game ~" + clock(s.getSecondsToNextGame());
+		}
+		// An open portal matters in any phase: the last one of a round is entered as it closes.
+		if (s.isPortalOpen())
+		{
+			right = s.getPortalSecondsRemaining() >= 0 ? "portal " + s.getPortalSecondsRemaining() + "s" : "portal open";
+			rightColor = HIGH;
 		}
 		if (left != null || right != null)
 		{
@@ -196,6 +197,11 @@ public class InstructionOverlay extends OverlayPanel
 
 	private void timers(Snapshot s)
 	{
+		if (s.getPhase() != GamePhase.ACTIVE && s.isPortalOpen())
+		{
+			// The last portal of a round can still be open as the round closes.
+			line("Portal", s.getPortalSecondsRemaining() >= 0 ? "open - " + s.getPortalSecondsRemaining() + "s" : "open", HIGH);
+		}
 		if (s.getPhase() == GamePhase.ACTIVE)
 		{
 			if (s.getSecondsSinceStart() >= 0)

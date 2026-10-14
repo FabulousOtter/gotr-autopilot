@@ -167,6 +167,9 @@ public class Snapshot
 	// Remains-to-workbench distance in tiles.
 	@Builder.Default
 	Map<Target, Integer> returnTicks = ImmutableMap.of();
+	// Distance in tiles from each errand to the open portal.
+	@Builder.Default
+	Map<Target, Integer> portalTicks = ImmutableMap.of();
 
 	public int pouchStored()
 	{

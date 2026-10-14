@@ -273,6 +273,7 @@ public class GotrAutopilotPlugin extends Plugin
 				.travelTicks(travelTicks())
 				.guardianTravelTicks(guardianTravelTicks())
 				.returnTicks(returnTicks())
+				.portalTicks(s.isPortalOpen() ? portalTicks() : Collections.emptyMap())
 				.chosenTile(lastTile)
 				.lastStep(lastStep)
 				.build();
@@ -614,15 +615,41 @@ public class GotrAutopilotPlugin extends Plugin
 		return out;
 	}
 
-	private void putReturn(Map<Target, Integer> out, Target target, @Nullable GameObject object, GameObject bench)
+	// Distance from each errand on to the open portal, to fit the errand in before it closes.
+	private Map<Target, Integer> portalTicks()
+	{
+		Map<Target, Integer> out = new EnumMap<>(Target.class);
+		GameObject portal = tracker.getPortal();
+		if (portal == null)
+		{
+			return out;
+		}
+		putReturn(out, Target.DEPOSIT_POOL, tracker.getLandmarks().get(ObjectID.GOTR_DEPOSITCHEST), portal);
+		putReturn(out, Target.UNCHARGED_CELL_TABLE, tracker.getLandmarks().get(ObjectID.GOTR_UNCHARGED_CELLS), portal);
+		int[] box = guardianFootprint();
+		if (box != null)
+		{
+			int d = pathfinder.distanceBetween(
+				portal.getSceneMinLocation().getX(), portal.getSceneMinLocation().getY(),
+				portal.getSceneMaxLocation().getX(), portal.getSceneMaxLocation().getY(),
+				box[0], box[1], box[2], box[3], transports);
+			if (d >= 0)
+			{
+				out.put(Target.GREAT_GUARDIAN, d);
+			}
+		}
+		return out;
+	}
+
+	private void putReturn(Map<Target, Integer> out, Target target, @Nullable GameObject object, GameObject from)
 	{
 		if (object == null)
 		{
 			return;
 		}
 		int d = pathfinder.distanceBetween(
-			bench.getSceneMinLocation().getX(), bench.getSceneMinLocation().getY(),
-			bench.getSceneMaxLocation().getX(), bench.getSceneMaxLocation().getY(),
+			from.getSceneMinLocation().getX(), from.getSceneMinLocation().getY(),
+			from.getSceneMaxLocation().getX(), from.getSceneMaxLocation().getY(),
 			object.getSceneMinLocation().getX(), object.getSceneMinLocation().getY(),
 			object.getSceneMaxLocation().getX(), object.getSceneMaxLocation().getY(), transports);
 		if (d >= 0)

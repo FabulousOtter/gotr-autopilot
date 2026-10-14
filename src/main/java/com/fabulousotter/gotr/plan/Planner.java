@@ -135,10 +135,16 @@ public class Planner
 			return Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Wait for the game to start")
 				.detail(when).urgency(Urgency.INFO).build();
 		}
-		if (s.isPortalOpen() && s.getUnchargedCells() >= 10 && !s.anyPouchDegraded())
+		if (s.isPortalOpen())
 		{
-			return Instruction.builder().step(Step.ENTER_PORTAL).headline("Enter the portal and wait inside")
-				.detail("Wait inside for the next game").target(Target.PORTAL).build();
+			// A portal between rounds: only what fits before it closes, then wait inside.
+			Instruction prep = graceResupply(s);
+			if (prep != null)
+			{
+				return prep;
+			}
+			return Instruction.builder().step(Step.ENTER_PORTAL).headline("Enter the portal and wait inside" + direction(s))
+				.detail("Wait inside for the next game").target(Target.PORTAL).urgency(Urgency.HIGH).build();
 		}
 		if (s.getDepositableRunes() > 0)
 		{
@@ -221,7 +227,8 @@ public class Planner
 
 	private Instruction ended(Snapshot s, PlannerSettings c)
 	{
-		if (s.hasStones() && s.getLocation() == Location.TEMPLE)
+		// With a portal open the stones wait their turn among the errands that fit before it closes.
+		if (s.hasStones() && s.getLocation() == Location.TEMPLE && !s.isPortalOpen())
 		{
 			return Instruction.builder().step(Step.POWER_UP).headline("Hand in your stones now")
 				.detail("The rift is closing").target(Target.GREAT_GUARDIAN).items(STONE_ITEMS).urgency(Urgency.HIGH).build();
@@ -315,28 +322,39 @@ public class Planner
 	@Nullable
 	private Instruction graceResupply(Snapshot s, int left)
 	{
-		int budget = left - walkSeconds(s, Target.PORTAL, 15) - 3;
-		if (s.hasStones() && walkSeconds(s, Target.GREAT_GUARDIAN, 10) + 2 <= budget)
+		if (s.hasStones() && errandFits(s, Target.GREAT_GUARDIAN, 10, 2, left))
 		{
 			return Instruction.builder().step(Step.POWER_UP).headline("Hand in your stones, then enter the portal")
 				.detail("").target(Target.GREAT_GUARDIAN).items(STONE_ITEMS).urgency(Urgency.HIGH).build();
 		}
-		if (s.getDepositableRunes() > 0 && walkSeconds(s, Target.DEPOSIT_POOL, 10) + 2 <= budget)
+		if (s.getDepositableRunes() > 0 && errandFits(s, Target.DEPOSIT_POOL, 10, 2, left))
 		{
 			return Instruction.builder().step(Step.DEPOSIT_RUNES).headline("Deposit your runes, then enter the portal")
 				.detail("").target(Target.DEPOSIT_POOL).urgency(Urgency.HIGH).build();
 		}
-		if (s.getUnchargedCells() < 10 && walkSeconds(s, Target.UNCHARGED_CELL_TABLE, 10) + 2 <= budget)
+		if (s.getUnchargedCells() < 10 && errandFits(s, Target.UNCHARGED_CELL_TABLE, 10, 2, left))
 		{
 			return Instruction.builder().step(Step.PRE_TAKE_CELLS).headline("Collect uncharged cells, then enter the portal")
 				.detail("").target(Target.UNCHARGED_CELL_TABLE).urgency(Urgency.HIGH).build();
 		}
-		if (s.anyPouchDegraded() && walkSeconds(s, Target.APPRENTICE_CORDELIA, 15) + 4 <= budget)
+		if (s.anyPouchDegraded() && errandFits(s, Target.APPRENTICE_CORDELIA, 15, 4, left))
 		{
 			return Instruction.builder().step(Step.PRE_REPAIR_POUCHES).headline("Repair your pouches, then enter the portal")
 				.detail("").target(Target.APPRENTICE_CORDELIA).items(degradedPouches(s)).urgency(Urgency.HIGH).build();
 		}
 		return null;
+	}
+
+	/**
+	 * Whether the walk to an errand, the errand itself and the walk on from there to the portal
+	 * fit before the portal must be entered. The onward leg is measured from the errand when the
+	 * portal is open, as the way there can lead away from it.
+	 */
+	private static boolean errandFits(Snapshot s, Target errand, int walkDefault, int errandSeconds, int left)
+	{
+		Integer onward = s.getPortalTicks().get(errand);
+		int onwardSeconds = onward == null ? walkSeconds(s, Target.PORTAL, 15) : (int) Math.round(onward / 2.0 * 0.6);
+		return walkSeconds(s, errand, walkDefault) + errandSeconds + onwardSeconds + 3 <= left;
 	}
 
 	private Instruction afterStones(Snapshot s, PlannerSettings c)

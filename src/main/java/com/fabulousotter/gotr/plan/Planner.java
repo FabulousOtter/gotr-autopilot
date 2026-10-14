@@ -166,7 +166,7 @@ public class Planner
 		// In the final seconds stop collecting or spending a cell and head to the remains.
 		boolean positioning = t >= 0 && t <= POSITION_SECONDS;
 		boolean cellReachable = t < 0 || t >= 15 || walkSeconds(s, Target.WEAK_CELL_TABLE, 0) <= t;
-		if (!positioning && s.getChargedCell() == null && s.isWeakCellTablePresent() && cellReachable)
+		if (c.isTakeWeakCell() && !positioning && s.getChargedCell() == null && s.isWeakCellTablePresent() && cellReachable)
 		{
 			return Instruction.builder().step(Step.PRE_TAKE_WEAK_CELL).headline("Collect a weak cell")
 				.detail(when).target(Target.WEAK_CELL_TABLE).build();

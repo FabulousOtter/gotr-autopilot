@@ -213,6 +213,19 @@ public interface GotrAutopilotConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "takeWeakCell",
+		name = "Weak cells before the game",
+		description = "Before a game, pick up weak cells<br>"
+			+ "to build barriers or guardians with",
+		section = strategySection,
+		position = 11
+	)
+	default boolean takeWeakCell()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "notification",
 		name = "Notify on new step",
 		description = "Notification when the instruction changes",

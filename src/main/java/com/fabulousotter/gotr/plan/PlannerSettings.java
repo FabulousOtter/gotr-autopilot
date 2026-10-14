@@ -58,6 +58,8 @@ public class PlannerSettings
 	@Builder.Default
 	boolean depositRunes = false;
 	@Builder.Default
+	boolean takeWeakCell = true;
+	@Builder.Default
 	int gracePortalSeconds = 95;
 	// How long to wait for a better altar when only a weak one is usable; 0 never waits. Every
 	// altar pays two energy per essence, so the wait only buys a better cell, and points come

@@ -123,7 +123,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "desiredGuardians",
 		name = "Guardians wanted",
-		description = "Build guardians with strong/overcharged cells until this many are active",
+		description = "Build guardians with strong/overcharged cells<br>"
+			+ "until this many are active",
 		section = strategySection,
 		position = 4
 	)
@@ -138,7 +139,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "maxImbalance",
 		name = "Max energy imbalance",
-		description = "Skip a high tier altar when it would put one energy type this far ahead of the other",
+		description = "Skip a high tier altar when it would put one<br>"
+			+ "energy type this far ahead of the other",
 		section = strategySection,
 		position = 5
 	)
@@ -150,7 +152,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "balanceWithSaved",
 		name = "Balance with banked points",
-		description = "Count reward points you already hold when choosing which type to craft",
+		description = "Count reward points you already hold<br>"
+			+ "when choosing which type to craft",
 		section = strategySection,
 		position = 6
 	)
@@ -179,7 +182,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "portalMinCapacity",
 		name = "Portal min room",
-		description = "Only chase a portal when you have room for at least this much essence",
+		description = "Only chase a portal when you have room<br>"
+			+ "for at least this much essence",
 		section = strategySection,
 		position = 8
 	)
@@ -262,7 +266,9 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "notifyAfterSeconds",
 		name = "Notify only after (s)",
-		description = "Only notify when the previous step lasted at least this long (a mining or crafting stint you may have tabbed out of). 0 = always",
+		description = "Only notify when the previous step lasted at least<br>"
+			+ "this long (a mining or crafting stint you may have<br>"
+			+ "tabbed out of). 0 = always",
 		section = displaySection,
 		position = 1
 	)
@@ -312,7 +318,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "urgentColor",
 		name = "Urgent colour",
-		description = "Outline colour when the step is urgent (broken tile, open portal)",
+		description = "Outline colour when the step is urgent<br>"
+			+ "(broken tile, open portal)",
 		section = displaySection,
 		position = 5
 	)
@@ -324,7 +331,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "showTimers",
 		name = "Show timers",
-		description = "Portal, altar rotation and energy lines under the instruction",
+		description = "Portal, altar rotation and energy lines<br>"
+			+ "under the instruction",
 		section = displaySection,
 		position = 6
 	)
@@ -336,7 +344,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "compactOverlay",
 		name = "Compact overlay",
-		description = "A narrower panel in the small font with the timers folded onto two lines, for fixed and small layouts",
+		description = "A narrower panel in the small font with the timers<br>"
+			+ "folded onto two lines, for fixed and small layouts",
 		section = displaySection,
 		position = 7
 	)
@@ -348,7 +357,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "showTargetLabel",
 		name = "Label on target",
-		description = "Draw the current step's text above the object, NPC or tile it points at",
+		description = "Draw the current step's text above the object,<br>"
+			+ "NPC or tile it points at",
 		section = displaySection,
 		position = 8
 	)
@@ -360,7 +370,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "hideGuardianForCells",
 		name = "Hide guardian for cells",
-		description = "Hide the Great Guardian while a cell is to be placed on a tile or barrier, so it cannot be clicked by mistake",
+		description = "Hide the Great Guardian while a cell is to be placed<br>"
+			+ "on a tile or barrier, so it cannot be clicked by mistake",
 		section = displaySection,
 		position = 9
 	)

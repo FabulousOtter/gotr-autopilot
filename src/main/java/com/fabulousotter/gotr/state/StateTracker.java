@@ -34,6 +34,7 @@ import com.google.common.collect.ImmutableSet;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -62,6 +63,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GroundObjectDespawned;
 import net.runelite.api.events.GroundObjectSpawned;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.ScriptPreFired;
@@ -273,6 +275,16 @@ public class StateTracker
 	private final Set<Altar> talismans = new HashSet<>();
 	private final Map<Integer, Integer> runeStacks = new HashMap<>();
 	private final Map<PouchType, Boolean> pouchesPresent = new EnumMap<>(PouchType.class);
+	// What each pouch held at the last tick, and what each degraded pouch held when last seen
+	// full: a degraded pouch keeps losing capacity, and seeing it full is the surest measure.
+	private final Map<PouchType, Integer> pouchStored = new EnumMap<>(PouchType.class);
+	private final Map<PouchType, Integer> pouchSeenFull = new EnumMap<>(PouchType.class);
+	private int pouchEssence;
+	// The last Fill on a pouch, checked a couple of ticks on: one that moved nothing found it full.
+	private PouchType fillClicked;
+	private int fillClickTick;
+	private int fillClickStored;
+	private int fillClickEssence;
 	private boolean bindingNecklaceWorn;
 	private boolean runePouch;
 
@@ -299,6 +311,9 @@ public class StateTracker
 		resetScene();
 		readInventory(null);
 		readEquipment(null);
+		pouchStored.clear();
+		pouchSeenFull.clear();
+		fillClicked = null;
 		scanPending = false;
 		scannedOnce = false;
 		lastLocation = Location.OUTSIDE;
@@ -873,6 +888,24 @@ public class StateTracker
 	}
 
 	@Subscribe
+	public void onMenuOptionClicked(MenuOptionClicked event)
+	{
+		if (!"Fill".equals(event.getMenuOption()))
+		{
+			return;
+		}
+		PouchType pouch = PouchType.fromItem(event.getItemId());
+		Integer stored = pouch == null ? null : pouchStored.get(pouch);
+		if (stored != null)
+		{
+			fillClicked = pouch;
+			fillClickTick = client.getTickCount();
+			fillClickStored = stored;
+			fillClickEssence = essence;
+		}
+	}
+
+	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
 		if (event.getContainerId() == InventoryID.WORN)
@@ -1031,10 +1064,13 @@ public class StateTracker
 		}
 		if (locatePlayer() == Location.OUTSIDE)
 		{
+			// Pouches filled away from here, at a bank say, say nothing about their capacity.
+			pouchStored.clear();
 			return;
 		}
 		// Poll once after container events, before sampling rates, to recover missed updates.
 		readInventory(client.getItemContainer(InventoryID.INV));
+		observePouches(tick);
 		if (questCheckedTick < 0 || tick - questCheckedTick >= QUEST_REFRESH_TICKS)
 		{
 			refreshQuestLocks();
@@ -1105,6 +1141,80 @@ public class StateTracker
 			}
 		}
 		questLockedAltars = ImmutableSet.copyOf(locked);
+	}
+
+	/**
+	 * Notes what each pouch holds and learns a degraded pouch's capacity by seeing it full: a
+	 * fill that left essence in the inventory, or a Fill that moved nothing. The degradation
+	 * counters give the capacity directly; this covers a pouch that holds less than they say.
+	 */
+	private void observePouches(int tick)
+	{
+		Set<PouchType> rose = EnumSet.noneOf(PouchType.class);
+		int added = 0;
+		for (PouchType type : PouchType.values())
+		{
+			Boolean degraded = pouchesPresent.get(type);
+			if (degraded == null || !degraded)
+			{
+				// Gone, intact or repaired: whatever it held when full no longer applies.
+				pouchSeenFull.remove(type);
+			}
+			if (degraded == null)
+			{
+				pouchStored.remove(type);
+				continue;
+			}
+			int stored = client.getVarbitValue(type.getVarbitId());
+			Integer previous = pouchStored.put(type, stored);
+			if (previous != null && stored > previous)
+			{
+				rose.add(type);
+				added += stored - previous;
+			}
+		}
+		// Every essence that left the inventory went into a pouch and some is left over, so each
+		// pouch that took essence could take no more.
+		if (added > 0 && pouchEssence - essence == added && essence > 0)
+		{
+			for (PouchType type : rose)
+			{
+				if (pouchesPresent.get(type))
+				{
+					pouchSeenFull.put(type, pouchStored.get(type));
+				}
+			}
+		}
+		if (fillClicked != null && tick - fillClickTick >= 2)
+		{
+			Integer stored = pouchStored.get(fillClicked);
+			if (stored != null && stored == fillClickStored && essence > 0 && essence <= fillClickEssence
+				&& Boolean.TRUE.equals(pouchesPresent.get(fillClicked)))
+			{
+				pouchSeenFull.put(fillClicked, stored);
+			}
+			fillClicked = null;
+		}
+		pouchEssence = essence;
+	}
+
+	private int pouchCapacity(PouchType type, int runecraftLevel, boolean degraded, int stored)
+	{
+		// The item says whether the pouch is degraded at all; the counter says how far.
+		int stage = 0;
+		if (degraded)
+		{
+			int counter = type.getDegradationVarp() >= 0 ? client.getVarpValue(type.getDegradationVarp())
+				: type.getDegradationVarbit() >= 0 ? client.getVarbitValue(type.getDegradationVarbit()) : 0;
+			stage = Math.max(1, type.stage(counter));
+		}
+		int capacity = type.capacity(runecraftLevel, stage);
+		Integer full = pouchSeenFull.get(type);
+		if (full != null)
+		{
+			capacity = Math.min(capacity, full);
+		}
+		return Math.max(capacity, stored);
 	}
 
 	// Object animations update before the HUD script on altar rotations.
@@ -1228,7 +1338,8 @@ public class StateTracker
 		{
 			PouchType type = entry.getKey();
 			boolean degraded = entry.getValue();
-			pouches.add(new PouchState(type, client.getVarbitValue(type.getVarbitId()), type.capacity(rc, degraded), degraded));
+			int stored = client.getVarbitValue(type.getVarbitId());
+			pouches.add(new PouchState(type, stored, pouchCapacity(type, rc, degraded, stored), degraded));
 		}
 
 		List<BarrierState> barriers = new ArrayList<>();

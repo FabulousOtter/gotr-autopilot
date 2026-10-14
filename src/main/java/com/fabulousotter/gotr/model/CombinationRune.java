@@ -59,15 +59,16 @@ public enum CombinationRune
 		return null;
 	}
 
-	public static boolean isCombinationRune(int itemId)
+	@Nullable
+	public static CombinationRune fromRune(int itemId)
 	{
 		for (CombinationRune rune : values())
 		{
 			if (rune.runeItemId == itemId)
 			{
-				return true;
+				return rune;
 			}
 		}
-		return false;
+		return null;
 	}
 }

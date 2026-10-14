@@ -54,6 +54,9 @@ public class PlannerSettings
 	boolean protectRightBarrier = true;
 	@Builder.Default
 	int portalMinCapacity = 10;
+	// On for players who bank their runes at the deposit pool for the inventory space.
+	@Builder.Default
+	boolean depositRunes = false;
 	@Builder.Default
 	int gracePortalSeconds = 95;
 	// How long to wait for a better altar when only a weak one is usable; 0 never waits. Every

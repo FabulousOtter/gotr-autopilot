@@ -182,6 +182,7 @@ public class StateTracker
 	private final ClientThread clientThread;
 	private final ItemManager itemManager;
 	private final ConfigManager configManager;
+	private final GotrAutopilotConfig config;
 
 	// HUD script arguments and the tick they were last seen on.
 	private int hudElemental;
@@ -274,6 +275,10 @@ public class StateTracker
 	private int freeSlots = INVENTORY_SIZE;
 	private final Set<Altar> talismans = new HashSet<>();
 	private final Map<Integer, Integer> runeStacks = new HashMap<>();
+	// Lower-case rune names without the " rune", matched against the runes to keep.
+	private final Map<Integer, String> runeNames = new HashMap<>();
+	private String keepRunesSetting;
+	private Set<String> runesToKeep = ImmutableSet.of();
 	private final Map<PouchType, Boolean> pouchesPresent = new EnumMap<>(PouchType.class);
 	// What each pouch held at the last tick, and what each degraded pouch held when last seen
 	// full: a degraded pouch keeps losing capacity, and seeing it full is the surest measure.
@@ -298,12 +303,14 @@ public class StateTracker
 	private int lastStones;
 
 	@Inject
-	StateTracker(Client client, ClientThread clientThread, ItemManager itemManager, ConfigManager configManager)
+	StateTracker(Client client, ClientThread clientThread, ItemManager itemManager, ConfigManager configManager,
+		GotrAutopilotConfig config)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.itemManager = itemManager;
 		this.configManager = configManager;
+		this.config = config;
 	}
 
 	public void reset()
@@ -935,6 +942,7 @@ public class StateTracker
 		runePouch = false;
 		talismans.clear();
 		runeStacks.clear();
+		runeNames.clear();
 		pouchesPresent.clear();
 		int used = 0;
 		if (items == null)
@@ -1003,15 +1011,19 @@ public class StateTracker
 				runePouch = true;
 				continue;
 			}
-			if (Altar.fromRune(id) != null || CombinationRune.isCombinationRune(id))
+			Altar rune = Altar.fromRune(id);
+			CombinationRune combination = rune == null ? CombinationRune.fromRune(id) : null;
+			if (rune != null || combination != null)
 			{
 				runeStacks.merge(id, qty, Integer::sum);
+				runeNames.put(id, (rune != null ? rune.getLabel() : combination.getLabel()).toLowerCase(Locale.ROOT));
 				continue;
 			}
 			String name = itemName(id);
 			if (name.endsWith(" rune"))
 			{
 				runeStacks.merge(id, qty, Integer::sum);
+				runeNames.put(id, name.substring(0, name.length() - " rune".length()));
 			}
 			else if (name.contains("pickaxe"))
 			{
@@ -1371,11 +1383,18 @@ public class StateTracker
 		int depositable = 0;
 		int baseCount = 0;
 		Altar baseRune = baseRuneCarried();
+		Set<String> keep = runesToKeep();
+		List<String> kept = new ArrayList<>();
 		for (Map.Entry<Integer, Integer> stack : runeStacks.entrySet())
 		{
+			String name = runeNames.get(stack.getKey());
 			if (baseRune != null && stack.getKey() == baseRune.getRuneItemId())
 			{
 				baseCount = stack.getValue();
+			}
+			else if (keep.contains(name))
+			{
+				kept.add(name);
 			}
 			else
 			{
@@ -1441,6 +1460,7 @@ public class StateTracker
 			.freeSlots(freeSlots)
 			.talismans(ImmutableSet.copyOf(talismans))
 			.depositableRunes(depositable)
+			.keptRunes(kept)
 			.baseRune(baseRune)
 			.baseRuneCount(baseCount)
 			.pouches(pouches)
@@ -1478,6 +1498,28 @@ public class StateTracker
 			return hugeExitPortal;
 		}
 		return portal;
+	}
+
+	// The configured runes to keep as lower-case names without " rune", parsed when the setting changes.
+	private Set<String> runesToKeep()
+	{
+		String setting = config.keepRunes();
+		if (setting == null || setting.equals(keepRunesSetting))
+		{
+			return setting == null ? ImmutableSet.of() : runesToKeep;
+		}
+		keepRunesSetting = setting;
+		Set<String> names = new HashSet<>();
+		for (String part : setting.toLowerCase(Locale.ROOT).split("[,;\\n]"))
+		{
+			String name = part.trim().replaceFirst("\\s+runes?$", "");
+			if (!name.isEmpty())
+			{
+				names.add(name);
+			}
+		}
+		runesToKeep = ImmutableSet.copyOf(names);
+		return runesToKeep;
 	}
 
 	private Altar baseRuneCarried()

@@ -103,6 +103,9 @@ public class Snapshot
 	@Builder.Default
 	Set<Altar> talismans = ImmutableSet.of();
 	int depositableRunes;
+	// Runes carried that the settings say to keep, by lower-case name ("earth", "astral").
+	@Builder.Default
+	List<String> keptRunes = ImmutableList.of();
 	@Nullable
 	Altar baseRune;
 	int baseRuneCount;

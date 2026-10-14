@@ -184,6 +184,35 @@ public interface GotrAutopilotConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "depositRunes",
+		name = "Deposit runes",
+		description = "Send you to the deposit pool, which banks your runes,<br>"
+			+ "to free inventory space. Leave off to keep your runes,<br>"
+			+ "or if you cannot bank (Ultimate Ironman)",
+		section = strategySection,
+		position = 9
+	)
+	default boolean depositRunes()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "keepRunes",
+		name = "Runes to keep",
+		description = "With Deposit runes on, runes never to deposit,<br>"
+			+ "separated by commas (for example: earth, law, astral).<br>"
+			+ "Your larger stack of air or water runes is always kept,<br>"
+			+ "for combination runes",
+		section = strategySection,
+		position = 10
+	)
+	default String keepRunes()
+	{
+		return "";
+	}
+
+	@ConfigItem(
 		keyName = "notification",
 		name = "Notify on new step",
 		description = "Notification when the instruction changes",

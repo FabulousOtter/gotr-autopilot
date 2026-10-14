@@ -33,6 +33,7 @@ import com.fabulousotter.gotr.state.Location;
 import com.fabulousotter.gotr.state.PouchState;
 import com.fabulousotter.gotr.state.Snapshot;
 import com.google.common.collect.ImmutableSet;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -75,6 +76,11 @@ public class Planner
 
 	public Instruction plan(Snapshot s, PlannerSettings c)
 	{
+		if (!c.isDepositRunes() && s.getDepositableRunes() > 0)
+		{
+			// The runes stay where they are and simply take their inventory slots.
+			s = s.toBuilder().depositableRunes(0).build();
+		}
 		if (s.getLocation() == Location.OUTSIDE)
 		{
 			return Instruction.builder().step(Step.NOT_IN_GAME).headline("").urgency(Urgency.INFO).build();
@@ -136,9 +142,7 @@ public class Planner
 		}
 		if (s.getDepositableRunes() > 0)
 		{
-			return Instruction.builder().step(Step.DEPOSIT_RUNES).headline("Deposit your runes")
-				.detail(keepBaseRune(s))
-				.target(Target.DEPOSIT_POOL).build();
+			return depositRunes(s);
 		}
 		if (s.anyPouchDegraded())
 		{
@@ -408,8 +412,10 @@ public class Planner
 		}
 		if (s.getFragments() > 0 && s.capacity() == 0)
 		{
+			boolean deposit = s.getDepositableRunes() > 0;
 			return Instruction.builder().step(Step.FREE_SPACE).headline("Make room for essence")
-				.detail("Deposit runes or use your cell").target(Target.DEPOSIT_POOL).build();
+				.detail(deposit ? "Deposit runes or use your cell" : "Use your cell or drop an item")
+				.target(deposit ? Target.DEPOSIT_POOL : Target.NONE).build();
 		}
 
 		Instruction portalWait = portalWait(s, c);
@@ -686,13 +692,25 @@ public class Planner
 	private static Instruction depositRunes(Snapshot s)
 	{
 		return Instruction.builder().step(Step.DEPOSIT_RUNES).headline("Deposit your runes")
-			.detail(keepBaseRune(s))
+			.detail(runesToKeep(s))
 			.target(Target.DEPOSIT_POOL).build();
 	}
 
-	private static String keepBaseRune(Snapshot s)
+	// The combination base rune and any runes the settings keep, as "Keep your air and law runes".
+	private static String runesToKeep(Snapshot s)
 	{
-		return s.getBaseRuneCount() > 0 ? "Keep your " + s.getBaseRune().getLabel().toLowerCase() + " runes" : "";
+		List<String> names = new ArrayList<>();
+		if (s.getBaseRuneCount() > 0)
+		{
+			names.add(s.getBaseRune().getLabel().toLowerCase());
+		}
+		names.addAll(s.getKeptRunes());
+		if (names.isEmpty())
+		{
+			return "";
+		}
+		String last = names.remove(names.size() - 1);
+		return "Keep your " + (names.isEmpty() ? "" : String.join(", ", names) + " and ") + last + " runes";
 	}
 
 	private static Set<Integer> degradedPouches(Snapshot s)

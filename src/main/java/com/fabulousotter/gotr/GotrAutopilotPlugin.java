@@ -818,6 +818,7 @@ public class GotrAutopilotPlugin extends Plugin
 			.maxImbalance(config.maxImbalance())
 			.protectRightBarrier(config.protectRightBarrier())
 			.portalMinCapacity(config.portalMinCapacity())
+			.depositRunes(config.depositRunes())
 			.build();
 	}
 

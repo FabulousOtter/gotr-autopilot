@@ -158,7 +158,8 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "protectRightBarrier",
 		name = "Solo: leave right barrier weak",
-		description = "Never recharge the right-most barrier so the 60% explosion does less damage",
+		description = "Build a weak barrier on the right-most tile and never<br>"
+			+ "recharge it, so the 60% explosion does less damage",
 		section = strategySection,
 		position = 7
 	)

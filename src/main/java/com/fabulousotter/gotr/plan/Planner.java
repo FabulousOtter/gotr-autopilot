@@ -73,6 +73,8 @@ public class Planner
 	/** Portal cadence and the time one costs: the walk in, the 30 s inside and the altar trip for the essence. */
 	private static final int PORTAL_INTERVAL_SECONDS = 140;
 	private static final int PORTAL_VISIT_SECONDS = 40;
+	private static final String NO_CHISEL = "no chisel to make a guardian";
+	private static final String KEEP_WEAK = "Never recharge it: the 60% explosion then does it little harm";
 
 	public Instruction plan(Snapshot s, PlannerSettings c)
 	{
@@ -201,9 +203,16 @@ public class Planner
 			WorldPoint tile = soloTile(s);
 			if (tile != null)
 			{
+				String noChisel = !s.isChisel() && s.getGuardiansActive() == 0 && c.getDesiredGuardians() > 0 ? NO_CHISEL : "";
 				return Instruction.builder().step(Step.PRE_BUILD_BARRIER).headline("Build the centre barrier")
-					.detail("Between the fire and blood portals")
+					.detail("Between the fire and blood portals" + (noChisel.isEmpty() ? "" : " - " + noChisel))
 					.target(Target.CELL_TILE).location(tile).items(cell).build();
+			}
+			WorldPoint right = weakRightTile(s, c, s.getChargedCell());
+			if (right != null)
+			{
+				return Instruction.builder().step(Step.PRE_BUILD_BARRIER).headline("Build a weak barrier on the far right")
+					.detail(KEEP_WEAK).target(Target.CELL_TILE).location(right).items(cell).build();
 			}
 			return null;
 		}
@@ -1130,7 +1139,8 @@ public class Planner
 		boolean slotFree = s.getGuardiansActive() < s.getGuardiansMax();
 		boolean needGuardian = s.getGuardiansActive() < c.getDesiredGuardians();
 		boolean strongEnough = tier.isAtLeast(CellTier.STRONG) || s.getGuardiansActive() == 0;
-		if (slotFree && needGuardian && strongEnough && s.isChisel())
+		boolean wantGuardian = slotFree && needGuardian && strongEnough;
+		if (wantGuardian && s.isChisel())
 		{
 			Alignment alignment = shortAlignment(s, c);
 			return Instruction.builder().step(Step.CELL_GUARDIAN)
@@ -1138,28 +1148,35 @@ public class Planner
 				.detail("Use the cell on the essence pile")
 				.target(pileFor(alignment)).items(cell).build();
 		}
-		if (s.getBarriers().isEmpty())
+		// Without a chisel the cell goes to a barrier instead; say why, as the guardian was wanted.
+		String note = wantGuardian ? NO_CHISEL : "";
+		// Solo rebuilds its one barrier whenever it is down, whatever else stands.
+		WorldPoint tile = c.getStrategy() == Strategy.SOLO ? soloTile(s) : s.getBarriers().isEmpty() ? emptyTile(s) : null;
+		if (tile != null)
 		{
-			WorldPoint tile = c.getStrategy() == Strategy.SOLO ? soloTile(s) : emptyTile(s);
-			if (tile != null)
-			{
-				return Instruction.builder().step(Step.CELL_BARRIER_BUILD).headline("Build a barrier")
-					.detail("").target(Target.CELL_TILE).location(tile).items(cell).build();
-			}
+			return Instruction.builder().step(Step.CELL_BARRIER_BUILD).headline("Build a barrier")
+				.detail(note).target(Target.CELL_TILE).location(tile).items(cell).build();
 		}
 		BarrierState target = barrierToTend(s, c, tier);
+		WorldPoint right = weakRightTile(s, c, tier);
+		boolean urgent = target != null && target.getHealthPercent() >= 0 && target.getHealthPercent() < 60;
+		if (right != null && !urgent)
+		{
+			return Instruction.builder().step(Step.CELL_BARRIER_BUILD).headline("Build a weak barrier on the far right")
+				.detail(KEEP_WEAK).target(Target.CELL_TILE).location(right).items(cell).build();
+		}
 		if (target != null)
 		{
 			if (target.getTier().getRank() < tier.getRank())
 			{
 				return Instruction.builder().step(Step.CELL_BARRIER_UPGRADE)
 					.headline("Strengthen the " + target.getTier().getLabel().toLowerCase() + " barrier")
-					.detail("")
+					.detail(note)
 					.target(Target.CELL_TILE).location(target.getLocation()).items(cell).build();
 			}
 			return Instruction.builder().step(Step.CELL_BARRIER_RECHARGE)
 				.headline("Recharge the " + target.getTier().getLabel().toLowerCase() + " barrier")
-				.detail("")
+				.detail(note)
 				.target(Target.CELL_TILE).location(target.getLocation()).items(cell).build();
 		}
 		if (slotFree && s.isChisel() && tier.isAtLeast(CellTier.STRONG))
@@ -1182,9 +1199,9 @@ public class Planner
 			return null;
 		}
 		BarrierState fresh = freshBarrierToTend(s, c, tier);
-		// Keep the previous barrier unless a new target is below 60% health.
+		// Keep the previous barrier unless a new target is below 60% health, or it is now left alone.
 		BarrierState kept = barrierAt(barriers, s.getChosenTile());
-		if (kept == null || kept == fresh)
+		if (kept == null || kept == fresh || kept == protectedBarrier(s, c))
 		{
 			return fresh;
 		}
@@ -1225,17 +1242,7 @@ public class Planner
 	private BarrierState freshBarrierToTend(Snapshot s, PlannerSettings c, CellTier tier)
 	{
 		List<BarrierState> barriers = s.getBarriers();
-		BarrierState protectedBarrier = null;
-		if (c.getStrategy() == Strategy.SOLO && c.isProtectRightBarrier() && barriers.size() > 1)
-		{
-			for (BarrierState barrier : barriers)
-			{
-				if (protectedBarrier == null || barrier.getLocation().getX() > protectedBarrier.getLocation().getX())
-				{
-					protectedBarrier = barrier;
-				}
-			}
-		}
+		BarrierState protectedBarrier = protectedBarrier(s, c);
 		BarrierState damaged = null;
 		BarrierState upgradable = null;
 		BarrierState unknown = null;
@@ -1336,21 +1343,95 @@ public class Planner
 		return s.getPortalDirection() == null || s.getPortalDirection().isEmpty() ? "" : " (" + s.getPortalDirection() + ")";
 	}
 
+	/**
+	 * Where the solo barrier still has to be built, or null once it stands. The strategy keeps
+	 * one barrier, between the fire and blood portals, for the creatures to queue at: a second
+	 * one near the middle splits them, so a neighbouring tile is never a stand-in.
+	 */
 	@Nullable
 	private static WorldPoint soloTile(Snapshot s)
 	{
-		if (s.getEmptyTiles().isEmpty())
+		WorldPoint centre = soloCentre(s);
+		if (centre == null)
 		{
-			return null;
+			// The portals are out of view: the first barrier goes on the nearest tile, and no more.
+			return s.getBarriers().isEmpty() ? nearest(s.getEmptyTiles(), s.getPlayerLocation()) : null;
 		}
+		return s.getEmptyTiles().contains(centre) ? centre : null;
+	}
+
+	// The solo barrier's tile, empty or not: the cell tile nearest the middle of the fire and blood portals.
+	@Nullable
+	private static WorldPoint soloCentre(Snapshot s)
+	{
 		WorldPoint fire = s.getPortalGuardians().get(Altar.FIRE);
 		WorldPoint blood = s.getPortalGuardians().get(Altar.BLOOD);
 		if (fire == null || blood == null)
 		{
-			return nearest(s.getEmptyTiles(), s.getPlayerLocation());
+			return null;
 		}
 		WorldPoint mid = new WorldPoint((fire.getX() + blood.getX()) / 2, (fire.getY() + blood.getY()) / 2, fire.getPlane());
-		return nearest(s.getEmptyTiles(), mid);
+		return nearest(cellTiles(s), mid);
+	}
+
+	/**
+	 * Solo: the right-most tile, whose barrier is built weak and never recharged, as the 60%
+	 * explosion does at most its health less one to it. Null when it is the solo barrier's own
+	 * tile or the setting is off.
+	 */
+	@Nullable
+	private static WorldPoint protectedTile(Snapshot s, PlannerSettings c)
+	{
+		if (c.getStrategy() != Strategy.SOLO || !c.isProtectRightBarrier())
+		{
+			return null;
+		}
+		WorldPoint right = null;
+		for (WorldPoint tile : cellTiles(s))
+		{
+			if (right == null || tile.getX() > right.getX())
+			{
+				right = tile;
+			}
+		}
+		return right == null || right.equals(soloCentre(s)) ? null : right;
+	}
+
+	/**
+	 * Solo: the barrier left alone, going by its tile. Going by the barriers that happen to stand,
+	 * a stray one to the west of the solo barrier would hand the solo barrier the protection.
+	 * Creatures do not attack it, so it is not tended even while it is the only one standing.
+	 */
+	@Nullable
+	private static BarrierState protectedBarrier(Snapshot s, PlannerSettings c)
+	{
+		WorldPoint tile = protectedTile(s, c);
+		// With the solo barrier's place unknown, a lone barrier may well be it.
+		if (tile == null || (soloCentre(s) == null && s.getBarriers().size() < 2))
+		{
+			return null;
+		}
+		return barrierAt(s.getBarriers(), tile);
+	}
+
+	// Solo: the right-most tile while it is empty and a weak cell is in hand, once the solo barrier stands.
+	@Nullable
+	private static WorldPoint weakRightTile(Snapshot s, PlannerSettings c, CellTier tier)
+	{
+		WorldPoint right = tier == CellTier.WEAK ? protectedTile(s, c) : null;
+		return right != null && s.getEmptyTiles().contains(right) && soloTile(s) == null ? right : null;
+	}
+
+	// Every cell tile: empty, broken or under a barrier.
+	private static List<WorldPoint> cellTiles(Snapshot s)
+	{
+		List<WorldPoint> tiles = new ArrayList<>(s.getEmptyTiles());
+		tiles.addAll(s.getBrokenTiles());
+		for (BarrierState barrier : s.getBarriers())
+		{
+			tiles.add(barrier.getLocation());
+		}
+		return tiles;
 	}
 
 	@Nullable

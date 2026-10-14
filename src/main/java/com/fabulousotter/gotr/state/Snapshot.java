@@ -84,6 +84,8 @@ public class Snapshot
 	@Builder.Default
 	int secondsToNextPortal = -1;
 	boolean anyPortalThisGame;
+	// Whether the player has been inside an altar this game: the opening run is over.
+	boolean altarVisitedThisGame;
 	int guardiansActive;
 	@Builder.Default
 	int guardiansMax = 10;

@@ -603,8 +603,10 @@ public class Planner
 			}
 			int rot = s.getAltarSecondsRemaining();
 			// Craft for the next altars once they are within the craft window, but no earlier
-			// than the load needs: with the pouches already full, a short craft can wait.
-			boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8;
+			// than the load needs: with the pouches already full, a short craft can wait. The
+			// opening run is the exception: it mines to its target whatever the altar clock says.
+			boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8
+				&& !massOpeningRun(s, c);
 			if (!s.isAnyPortalThisGame() && (fragments >= c.getOpeningFragmentTarget()
 				|| (windowOpen && fragments >= c.getMinFragmentsToCraft())))
 			{
@@ -623,9 +625,11 @@ public class Planner
 			}
 		}
 
-		// The opening run is the configured size; later runs mine what the rest of the game
-		// can use, so the remains are visited as few times as possible.
-		boolean opening = !s.isAnyPortalThisGame() && s.getActiveElemental() == null && s.getActiveCatalytic() == null;
+		// The opening run is the configured size, also once the altars open while it is under
+		// way; later runs mine what the rest of the game can use, so the remains are visited as
+		// few times as possible.
+		boolean opening = massOpeningRun(s, c)
+			|| (!s.isAnyPortalThisGame() && s.getActiveElemental() == null && s.getActiveCatalytic() == null);
 		int target = opening ? c.getOpeningFragmentTarget() : Math.max(room, c.getMinFragmentsToCraft());
 		if (close >= 0)
 		{
@@ -930,6 +934,23 @@ public class Planner
 			return null;
 		}
 		return mineFragments(s, c, target);
+	}
+
+	// Past the opening: a portal has come, or the first load has been taken to an altar.
+	private static boolean pastOpening(Snapshot s)
+	{
+		return s.isAnyPortalThisGame() || s.isAltarVisitedThisGame();
+	}
+
+	/**
+	 * Mass: mining the opening load, with no essence made yet and short of the opening target.
+	 * It runs to its target whatever the altar clock says, as mass worlds open with one long
+	 * run. Solo and general cut it at the craft window instead, to be crafting as the first
+	 * altars open, which their shorter games reward.
+	 */
+	private static boolean massOpeningRun(Snapshot s, PlannerSettings c)
+	{
+		return !pastOpening(s) && s.essenceTotal() == 0 && s.getFragments() < c.getOpeningFragmentTarget();
 	}
 
 	@Nullable

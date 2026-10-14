@@ -72,7 +72,9 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "openingFragments",
 		name = "Opening fragment target",
-		description = "Fragments to mine before the first crafting run (wiki: ~120 team, ~110 solo, 165 mass)",
+		description = "Fragments to mine before the first crafting run<br>"
+			+ "(wiki: ~120 team, ~110 solo, 165 mass).<br>"
+			+ "Solo and General stop sooner if the craft window opens first",
 		section = strategySection,
 		position = 1
 	)
@@ -88,7 +90,9 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "craftWindow",
 		name = "Craft window (s)",
-		description = "Stop mining and craft essence this many seconds before the altars change",
+		description = "Stop mining and craft essence this many seconds<br>"
+			+ "before the altars change. In the Mass strategy<br>"
+			+ "the opening run always mines to its target",
 		section = strategySection,
 		position = 2
 	)

@@ -209,6 +209,7 @@ public class StateTracker
 	private int learnedBreakSeconds = -1;
 	private int lastPortalSpawnTick = -1;
 	private boolean anyPortalThisGame;
+	private boolean altarVisitedThisGame;
 	private boolean portalOpen;
 	private String portalDirection;
 	private boolean scanPending;
@@ -333,6 +334,7 @@ public class StateTracker
 		loadBreak();
 		lastPortalSpawnTick = -1;
 		anyPortalThisGame = false;
+		altarVisitedThisGame = false;
 		portalOpen = false;
 		portalDirection = null;
 		hudTick = -1;
@@ -583,6 +585,7 @@ public class StateTracker
 			gameEndTick = -1;
 			lastPortalSpawnTick = -1;
 			anyPortalThisGame = false;
+			altarVisitedThisGame = false;
 			portalOpen = false;
 			barrierHealth.clear();
 			return;
@@ -1074,11 +1077,16 @@ public class StateTracker
 			scannedOnce = true;
 			scanScene();
 		}
-		if (locatePlayer() == Location.OUTSIDE)
+		Location location = locatePlayer();
+		if (location == Location.OUTSIDE)
 		{
 			// Pouches filled away from here, at a bank say, say nothing about their capacity.
 			pouchStored.clear();
 			return;
+		}
+		if (location == Location.ALTAR_ROOM && phase == GamePhase.ACTIVE)
+		{
+			altarVisitedThisGame = true;
 		}
 		// Poll once after container events, before sampling rates, to recover missed updates.
 		readInventory(client.getItemContainer(InventoryID.INV));
@@ -1445,6 +1453,7 @@ public class StateTracker
 			.secondsSinceLastPortal(sinceLastPortal)
 			.secondsToNextPortal(toNextPortal)
 			.anyPortalThisGame(anyPortalThisGame)
+			.altarVisitedThisGame(altarVisitedThisGame)
 			.guardiansActive(hudGuardians)
 			.guardiansMax(hudGuardiansMax > 0 ? hudGuardiansMax : 10)
 			.fragments(fragments)

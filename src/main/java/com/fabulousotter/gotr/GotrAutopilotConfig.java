@@ -231,6 +231,20 @@ public interface GotrAutopilotConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "mineAfterOpening",
+		name = "Mine after the opening",
+		description = "Go back to the remains for more fragments once<br>"
+			+ "the opening run is done. Off: craft the fragments<br>"
+			+ "you have left and wait for the portals instead",
+		section = strategySection,
+		position = 12
+	)
+	default boolean mineAfterOpening()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "notification",
 		name = "Notify on new step",
 		description = "Notification when the instruction changes",

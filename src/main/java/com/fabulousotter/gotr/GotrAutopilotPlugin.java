@@ -847,6 +847,7 @@ public class GotrAutopilotPlugin extends Plugin
 			.portalMinCapacity(config.portalMinCapacity())
 			.depositRunes(config.depositRunes())
 			.takeWeakCell(config.takeWeakCell())
+			.mineAfterOpening(config.mineAfterOpening())
 			.build();
 	}
 

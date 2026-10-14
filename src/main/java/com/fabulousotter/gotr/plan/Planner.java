@@ -305,7 +305,7 @@ public class Planner
 			return Instruction.builder().step(Step.POWER_UP).headline("Power up the Great Guardian")
 				.detail("").target(Target.GREAT_GUARDIAN).items(STONE_ITEMS).build();
 		}
-		Instruction next = afterStones(s, c);
+		Instruction next = withoutMining(s, c, afterStones(s, c));
 		if (!holding)
 		{
 			return next;
@@ -934,6 +934,34 @@ public class Planner
 			return null;
 		}
 		return mineFragments(s, c, target);
+	}
+
+	/**
+	 * With mining after the opening turned off, a walk back to the remains becomes crafting the
+	 * fragments left, a trip with the essence in hand, or a wait for the next portal's essence.
+	 */
+	private Instruction withoutMining(Snapshot s, PlannerSettings c, Instruction next)
+	{
+		if (c.isMineAfterOpening() || next.getStep() != Step.MINE_FRAGMENTS || !pastOpening(s))
+		{
+			return next;
+		}
+		if (s.getFragments() > 0 && s.capacity() > 0)
+		{
+			return craftEssence(s);
+		}
+		if (s.essenceTotal() > 0)
+		{
+			return altarTrip(s, c, s.essenceTotal());
+		}
+		int eta = s.getSecondsToNextPortal();
+		if (eta >= 0)
+		{
+			return Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Portal opens in ~" + eta + "s")
+				.detail("Stay by the Great Guardian").urgency(Urgency.INFO).build();
+		}
+		return Instruction.builder().step(Step.IDLE_DEFEND).headline("Nothing left to craft")
+			.detail("Keep barriers and guardians up").urgency(Urgency.INFO).build();
 	}
 
 	// Past the opening: a portal has come, or the first load has been taken to an altar.

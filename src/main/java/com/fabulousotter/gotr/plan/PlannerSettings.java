@@ -59,6 +59,9 @@ public class PlannerSettings
 	boolean depositRunes = false;
 	@Builder.Default
 	boolean takeWeakCell = true;
+	// Off: once the opening run is done, fragments come only from what is left and the portals.
+	@Builder.Default
+	boolean mineAfterOpening = true;
 	@Builder.Default
 	int gracePortalSeconds = 95;
 	// How long to wait for a better altar when only a weak one is usable; 0 never waits. Every

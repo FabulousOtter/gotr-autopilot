@@ -704,6 +704,11 @@ public class Planner
 	private Instruction lastPortalOrTrip(Snapshot s, PlannerSettings c, int essence, int craftable, int trip, int close)
 	{
 		int eta = s.getSecondsToNextPortal();
+		if (close >= 0 && close < eta)
+		{
+			// The rift closes before that portal comes: the close alone sets the time left.
+			return null;
+		}
 		int fit = (int) Math.floor(Math.max(0, eta - trip - walkSeconds(s, Target.WORKBENCH, 10) - 3) / 0.6 * s.getCraftPerTick());
 		int crafted = Math.min(fit, craftable);
 		if (essence + crafted > MIN_PRE_PORTAL_TRIP)

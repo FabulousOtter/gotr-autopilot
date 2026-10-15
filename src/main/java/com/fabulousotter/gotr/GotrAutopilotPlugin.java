@@ -39,6 +39,7 @@ import com.fabulousotter.gotr.state.GamePhase;
 import com.fabulousotter.gotr.state.Location;
 import com.fabulousotter.gotr.state.Snapshot;
 import com.fabulousotter.gotr.state.StateTracker;
+import com.fabulousotter.gotr.trace.GameTrace;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Provides;
 import java.util.ArrayList;
@@ -157,6 +158,9 @@ public class GotrAutopilotPlugin extends Plugin
 	private StateTracker tracker;
 
 	@Inject
+	private GameTrace trace;
+
+	@Inject
 	private InstructionOverlay instructionOverlay;
 
 	@Inject
@@ -203,6 +207,8 @@ public class GotrAutopilotPlugin extends Plugin
 		overlayManager.add(sceneOverlay);
 		overlayManager.add(itemHighlightOverlay);
 		eventBus.register(tracker);
+		trace.startUp();
+		eventBus.register(trace);
 		renderCallbackManager.register(drawListener);
 		clientThread.invokeLater(tracker::primeFromClient);
 	}
@@ -211,6 +217,8 @@ public class GotrAutopilotPlugin extends Plugin
 	protected void shutDown()
 	{
 		eventBus.unregister(tracker);
+		eventBus.unregister(trace);
+		trace.shutDown();
 		renderCallbackManager.unregister(drawListener);
 		hideGuardian = false;
 		overlayManager.remove(instructionOverlay);
@@ -271,6 +279,7 @@ public class GotrAutopilotPlugin extends Plugin
 		Snapshot s = tracker.snapshot();
 		if (s.getLocation() == Location.OUTSIDE)
 		{
+			trace.tick(s, Step.NOT_IN_GAME);
 			clearInstruction();
 			pathfinder.clear();
 			return;
@@ -305,6 +314,7 @@ public class GotrAutopilotPlugin extends Plugin
 		lastTile = next.getTarget() == Target.CELL_TILE || next.getTarget() == Target.BARRIER ? next.getLocation() : null;
 		snapshot = s;
 		instruction = next;
+		trace.tick(s, next.getStep());
 
 		boolean altarSwitched = next.getStep() == Step.GO_TO_ALTAR && lastStep == Step.GO_TO_ALTAR
 			&& next.getAltar() != null && next.getAltar() != lastAltar;

@@ -46,7 +46,10 @@ public class RateTracker
 	private static final double PRIOR_PARTS = 0.4;
 	private static final double PRIOR_CRAFT = 1.0;
 	private static final double PRIOR_HUGE = 0.6;
-	private static final int POWER_WINDOW_TICKS = 100;
+	// Two minutes of samples: a small team hands in lumps of stones a minute or so apart.
+	private static final int POWER_WINDOW_TICKS = 200;
+	// How much of each tick's fresh slope goes into the smoothed rate.
+	private static final double RATE_SMOOTHING = 0.05;
 	// Allow for the HUD lagging inventory updates by a few ticks.
 	private static final int OWN_HAND_IN_WINDOW_TICKS = 3;
 
@@ -64,6 +67,8 @@ public class RateTracker
 	private int ownPower;
 	private int ownUntilTick = -1;
 	private int lastPower = -1;
+	// The crowd's rate, smoothed: the raw window slope jumps with every lump a team hands in.
+	private double smoothedRate = -1;
 
 	public void reset()
 	{
@@ -71,6 +76,7 @@ public class RateTracker
 		ownPower = 0;
 		ownUntilTick = -1;
 		lastPower = -1;
+		smoothedRate = -1;
 	}
 
 	public void noteOwnHandIn(int tick)
@@ -120,6 +126,11 @@ public class RateTracker
 		{
 			powerSamples.pollFirst();
 		}
+		double slope = windowSlope();
+		if (slope > 0)
+		{
+			smoothedRate = smoothedRate < 0 ? slope : smoothedRate + RATE_SMOOTHING * (slope - smoothedRate);
+		}
 	}
 
 	public double largePerTick()
@@ -143,9 +154,16 @@ public class RateTracker
 	}
 
 	/**
-	 * Excludes own hand-ins. Returns 0 for a flat, falling or insufficient sample window.
+	 * The crowd's rate, excluding own hand-ins and smoothed over the window. Returns 0 until
+	 * the window has shown a rise.
 	 */
 	public double powerPerTick()
+	{
+		return smoothedRate > 0 ? smoothedRate : 0;
+	}
+
+	// The raw slope of the window, or 0 for a flat, falling or short one.
+	private double windowSlope()
 	{
 		int[] first = powerSamples.peekFirst();
 		int[] last = powerSamples.peekLast();

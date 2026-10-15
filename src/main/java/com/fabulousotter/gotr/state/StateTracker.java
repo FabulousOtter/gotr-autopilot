@@ -211,6 +211,9 @@ public class StateTracker
 	private boolean anyPortalThisGame;
 	private boolean altarVisitedThisGame;
 	private boolean portalOpen;
+	// The tick the open portal closes on. The HUD drops the portal once the rift closes,
+	// but the portal itself stays open for the rest of its time.
+	private int portalClosesTick = -1;
 	private String portalDirection;
 	private boolean scanPending;
 	private boolean scannedOnce;
@@ -336,6 +339,7 @@ public class StateTracker
 		anyPortalThisGame = false;
 		altarVisitedThisGame = false;
 		portalOpen = false;
+		portalClosesTick = -1;
 		portalDirection = null;
 		hudTick = -1;
 		hudGuardianTicks = -1;
@@ -506,6 +510,10 @@ public class StateTracker
 			}
 			hudPortalLocation = portalLocation;
 			portalOpen = portalLocation > 0;
+			if (portalOpen)
+			{
+				portalClosesTick = hudPortalTicks >= 0 ? hudTick + hudPortalTicks : -1;
+			}
 			updatePhaseFromHud();
 		}
 		catch (NumberFormatException ex)
@@ -587,6 +595,7 @@ public class StateTracker
 			anyPortalThisGame = false;
 			altarVisitedThisGame = false;
 			portalOpen = false;
+			portalClosesTick = -1;
 			barrierHealth.clear();
 			return;
 		}
@@ -1428,7 +1437,9 @@ public class StateTracker
 		}
 		int hudAge = hudTick >= 0 ? tick - hudTick : 0;
 		int altarSeconds = hudGuardianTicks >= 0 ? Math.max(0, ticksToSeconds(hudGuardianTicks - hudAge)) : -1;
-		int portalSeconds = portalOpen && hudPortalTicks >= 0 ? Math.max(0, ticksToSeconds(hudPortalTicks - hudAge)) : -1;
+		// The portal object remains authoritative after HUD updates stop.
+		boolean portalStanding = portalOpen || portal != null;
+		int portalSeconds = portalStanding && portalClosesTick >= 0 ? Math.max(0, ticksToSeconds(portalClosesTick - tick)) : -1;
 		boolean useObserved = guardiansObserved && location == Location.TEMPLE;
 
 		return Snapshot.builder()
@@ -1446,8 +1457,7 @@ public class StateTracker
 			.activeElemental(useObserved ? observedElemental : Altar.fromHud(Alignment.ELEMENTAL, hudElementalIndex))
 			.activeCatalytic(useObserved ? observedCatalytic : Altar.fromHud(Alignment.CATALYTIC, hudCatalyticIndex))
 			.altarSecondsRemaining(altarSeconds)
-			// The portal object remains authoritative after HUD updates stop.
-			.portalOpen(portalOpen || portal != null)
+			.portalOpen(portalStanding)
 			.portalSecondsRemaining(portalSeconds)
 			.portalDirection(portalDirection)
 			.secondsSinceLastPortal(sinceLastPortal)

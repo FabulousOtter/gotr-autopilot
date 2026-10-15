@@ -29,6 +29,7 @@ import com.fabulousotter.gotr.model.Altar;
 import com.fabulousotter.gotr.model.CellTier;
 import com.fabulousotter.gotr.model.CombinationRune;
 import com.fabulousotter.gotr.state.BarrierState;
+import com.fabulousotter.gotr.state.GamePhase;
 import com.fabulousotter.gotr.state.Location;
 import com.fabulousotter.gotr.state.PouchState;
 import com.fabulousotter.gotr.state.Snapshot;
@@ -64,6 +65,8 @@ public class Planner
 	private static final int GRACE_MARGIN_SECONDS = 20;
 	private static final int DROP_ESSENCE_WAIT_SECONDS = 30;
 	private static final int SPARE_CELL_TILES = 10;
+	/** A barrier at or above this is as good as full: a cell on it is a spare, placed on the nearest. */
+	private static final int NEEDS_CELL_PERCENT = 90;
 	/** Smallest load worth an altar trip squeezed in before the last portal of the round. */
 	private static final int MIN_PRE_PORTAL_TRIP = 15;
 	/** Shortest stint at the parts worth walking over for while the altars are closed. */
@@ -134,8 +137,8 @@ public class Planner
 		}
 		if (s.getLocation() == Location.HUGE_REMAINS)
 		{
-			return Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Wait for the game to start")
-				.detail(when).urgency(Urgency.INFO).build();
+			// Through the grace portal: fill up for the next round, then wait where you are.
+			return inHugeRemains(s, true);
 		}
 		if (s.isPortalOpen())
 		{
@@ -201,6 +204,17 @@ public class Planner
 					.target(Target.ESSENCE_PILE_ELEMENTAL).items(cell).build();
 			}
 			WorldPoint tile = soloTile(s);
+			// A cell left from the last trip is lost with the round: in the closing window a
+			// guardian is what the wiki suggests for it, once the barrier stands.
+			boolean closing = s.getPhase() == GamePhase.CLOSING || s.getPhase() == GamePhase.ENDED;
+			if (closing && tile == null && s.getGuardiansActive() < s.getGuardiansMax() && s.isChisel())
+			{
+				Alignment alignment = shortAlignment(s, c);
+				return Instruction.builder().step(Step.PRE_BUILD_GUARDIAN)
+					.headline("Make a " + s.getChargedCell().getLabel().toLowerCase() + " " + alignment.getLabel().toLowerCase() + " guardian")
+					.detail("Use the cell on the essence pile")
+					.target(pileFor(alignment)).items(cell).build();
+			}
 			if (tile != null)
 			{
 				String noChisel = !s.isChisel() && s.getGuardiansActive() == 0 && c.getDesiredGuardians() > 0 ? NO_CHISEL : "";
@@ -253,33 +267,16 @@ public class Planner
 		}
 		if (s.getLocation() == Location.HUGE_REMAINS)
 		{
-			return inHugeRemains(s);
+			return inHugeRemains(s, false);
 		}
 
-		if (!s.getBrokenTiles().isEmpty())
-		{
-			WorldPoint tile = nearest(s.getBrokenTiles(), s.getPlayerLocation());
-			if (s.getFragments() >= TILE_REPAIR_FRAGMENTS)
-			{
-				return Instruction.builder().step(Step.REPAIR_TILE).headline("Repair the broken tile")
-					.detail("").target(Target.CELL_TILE).location(tile)
-					.items(FRAGMENT_ITEM).urgency(Urgency.HIGH).build();
-			}
-			if (!s.hasStones())
-			{
-				return Instruction.builder().step(Step.MINE_FRAGMENTS_FOR_REPAIR)
-					.headline("Mine " + (TILE_REPAIR_FRAGMENTS - s.getFragments()) + " fragments to repair the tile")
-					.detail("").target(miningTarget(s)).urgency(Urgency.HIGH).build();
-			}
-		}
-
-		// Run grace-portal preparation before the portal instruction while there is time.
+		// Run grace-portal preparation before the portal instruction while there is time. The
+		// portal comes before a broken tile: it is open for 26 s, the tile keeps.
 		if (s.isPortalOpen())
 		{
 			int close = s.getSecondsToClose();
 			int left = s.getPortalSecondsRemaining();
-			boolean grace = s.energyCapped() || (close >= 0 && close <= (left >= 0 ? left : 30) + GRACE_MARGIN_SECONDS);
-			if (grace)
+			if (graceTime(s))
 			{
 				Instruction prep = graceResupply(s);
 				if (prep != null)
@@ -295,6 +292,26 @@ public class Planner
 				String leftText = left >= 0 ? left + "s left" : "";
 				return Instruction.builder().step(Step.ENTER_PORTAL).headline("Enter the portal" + direction(s))
 					.detail(leftText).target(Target.PORTAL).urgency(Urgency.HIGH).build();
+			}
+		}
+
+		if (!s.getBrokenTiles().isEmpty())
+		{
+			// The tile chosen is kept while it is broken, so the walk does not change its mind.
+			WorldPoint tile = s.getChosenTile() != null && s.getBrokenTiles().contains(s.getChosenTile())
+				? s.getChosenTile() : nearest(s.getBrokenTiles(), s.getPlayerLocation());
+			if (s.getFragments() >= TILE_REPAIR_FRAGMENTS)
+			{
+				return Instruction.builder().step(Step.REPAIR_TILE).headline("Repair the broken tile")
+					.detail("").target(Target.CELL_TILE).location(tile)
+					.items(FRAGMENT_ITEM).urgency(Urgency.HIGH).build();
+			}
+			// With no slot for a fragment stack the load in hand goes to an altar first.
+			if (!s.hasStones() && (s.getFragments() > 0 || s.getFreeSlots() > 0))
+			{
+				return Instruction.builder().step(Step.MINE_FRAGMENTS_FOR_REPAIR)
+					.headline("Mine " + (TILE_REPAIR_FRAGMENTS - s.getFragments()) + " fragments to repair the tile")
+					.detail("").target(miningTarget(s)).urgency(Urgency.HIGH).build();
 			}
 		}
 
@@ -321,16 +338,42 @@ public class Planner
 		return next.toBuilder().detail(next.getDetail().isEmpty() ? note : next.getDetail() + " - " + note).build();
 	}
 
+	/**
+	 * Whether this round is over as far as a portal is concerned: the energy is maxed, or the
+	 * rift closes before the portal would, so a visit now is for the next round.
+	 */
+	private static boolean graceTime(Snapshot s)
+	{
+		int close = s.getSecondsToClose();
+		int left = s.getPortalSecondsRemaining();
+		// The close estimate drifts by seconds each tick: once judged, the judgement holds
+		// until the estimate has moved a few seconds the other way.
+		Step last = s.getLastStep();
+		boolean wasGrace = last == Step.POWER_UP || last == Step.DEPOSIT_RUNES || last == Step.PRE_TAKE_CELLS
+			|| last == Step.PRE_REPAIR_POUCHES;
+		int slack = wasGrace ? 5 : last == Step.ENTER_PORTAL ? -5 : 0;
+		return s.energyCapped() || (close >= 0 && close <= (left >= 0 ? left : 30) + GRACE_MARGIN_SECONDS + slack);
+	}
+
 	@Nullable
 	private Instruction graceResupply(Snapshot s)
 	{
-		return graceResupply(s, s.getPortalSecondsRemaining() >= 0 ? s.getPortalSecondsRemaining() : 30);
+		// With its time unknown the portal is entered as you are: no errand can be timed against it.
+		return s.getPortalSecondsRemaining() >= 0 ? graceResupply(s, s.getPortalSecondsRemaining()) : null;
 	}
 
-	/** Next-round resupply that fits in {@code left} seconds before the portal must be entered. */
+	/**
+	 * Next-round resupply that fits in {@code left} seconds before the portal must be entered.
+	 * An errand under way keeps a few seconds of grace, as the walk shifts the estimate.
+	 */
 	@Nullable
 	private Instruction graceResupply(Snapshot s, int left)
 	{
+		Step last = s.getLastStep();
+		if (last == Step.POWER_UP || last == Step.DEPOSIT_RUNES || last == Step.PRE_TAKE_CELLS || last == Step.PRE_REPAIR_POUCHES)
+		{
+			left += 4;
+		}
 		if (s.hasStones() && errandFits(s, Target.GREAT_GUARDIAN, 10, 2, left))
 		{
 			return Instruction.builder().step(Step.POWER_UP).headline("Hand in your stones, then enter the portal")
@@ -341,7 +384,10 @@ public class Planner
 			return Instruction.builder().step(Step.DEPOSIT_RUNES).headline("Deposit your runes, then enter the portal")
 				.detail("").target(Target.DEPOSIT_POOL).urgency(Urgency.HIGH).build();
 		}
-		if (s.getUnchargedCells() < 10 && errandFits(s, Target.UNCHARGED_CELL_TABLE, 10, 2, left))
+		// Once the portal is open it comes first, and cells are fetched only when none are left,
+		// as during a round. Until it opens, the wait is spent topping them up.
+		boolean cellsShort = s.isPortalOpen() ? s.getUnchargedCells() == 0 : s.getUnchargedCells() < 10;
+		if (cellsShort && errandFits(s, Target.UNCHARGED_CELL_TABLE, 10, 2, left))
 		{
 			return Instruction.builder().step(Step.PRE_TAKE_CELLS).headline("Collect uncharged cells, then enter the portal")
 				.detail("").target(Target.UNCHARGED_CELL_TABLE).urgency(Urgency.HIGH).build();
@@ -486,15 +532,21 @@ public class Planner
 			{
 				int craftable = Math.min(fragments, room);
 				int craftSeconds = (int) Math.round(craftable / s.getCraftPerTick() * 0.6) + walkSeconds(s, Target.WORKBENCH, 10);
-				boolean missesPortal = s.getSecondsToNextPortal() >= 0 && s.getSecondsToNextPortal() < craftSeconds + trip
+				// Once the trip is under way, walking shifts both estimates by a second or so:
+				// the portal must be comfortably reachable, and the close comfortably too soon,
+				// before the plan turns back from the altar; the checklist is as sticky.
+				int slack = s.getLastStep() == Step.GO_TO_ALTAR ? 5 : 0;
+				int closeSlack = s.getLastStep() == Step.GO_TO_ALTAR ? -5 : preppingForClose(s) ? 5 : 0;
+				boolean missesPortal = s.getSecondsToNextPortal() >= 0 && s.getSecondsToNextPortal() < craftSeconds + trip + slack
 					&& room + craftable >= c.getPortalMinCapacity();
-				boolean missesClose = close >= 0 && close < craftSeconds + trip + 5;
+				boolean missesClose = close >= 0 && close < craftSeconds + trip + 5 + closeSlack;
 				// An in-progress top-up is interrupted only by the portal or close.
 				if (!missesPortal && !missesClose)
 				{
 					return craftEssence(s);
 				}
-				int minWorth = craftingUnderway(s) ? 1 : 3;
+				// A trip under way is not turned back for less than a real top-up.
+				int minWorth = craftingUnderway(s) ? 1 : s.getLastStep() == Step.GO_TO_ALTAR ? MIN_TOPUP : 3;
 				if (missesPortal && missesClose)
 				{
 					Instruction last = lastPortalOrTrip(s, c, essence, craftable, trip, close);
@@ -531,7 +583,10 @@ public class Planner
 					return portalPrep(s, c, eta);
 				}
 			}
-			if (close >= 0 && close < trip)
+			// The close estimate drifts by seconds: a trip under way is not abandoned for a
+			// close only just too soon, and the checklist is not left for a trip only just possible.
+			int closeSlack = s.getLastStep() == Step.GO_TO_ALTAR ? -5 : preppingForClose(s) ? 5 : 0;
+			if (close >= 0 && close < trip + closeSlack)
 			{
 				return stayForClose(s, c, close);
 			}
@@ -550,9 +605,11 @@ public class Planner
 			&& (close < 0 || close > portalEta + 30);
 		if (portalSoon)
 		{
-			// The last portal of the round: resupply for the next round before it opens.
+			// The last portal of the round: resupply for the next round before it opens. The
+			// close estimate drifts, so the judgement sticks once made either way.
 			int trip = (int) Math.round(AltarChooser.tripSeconds(s, Altar.AIR));
-			if (close >= 0 && close < portalEta + PORTAL_VISIT_SECONDS + trip)
+			int lastSlack = preppingForClose(s) ? 5 : s.getLastStep() == Step.WAIT_FOR_PORTAL || s.getLastStep() == Step.MINE_FRAGMENTS ? -5 : 0;
+			if (close >= 0 && close < portalEta + PORTAL_VISIT_SECONDS + trip + lastSlack)
 			{
 				Instruction prep = graceResupply(s, portalEta + 30);
 				if (prep != null)
@@ -584,7 +641,10 @@ public class Planner
 			int trip = (int) Math.round(AltarChooser.tripSeconds(s, s.getActiveCatalytic() != null ? s.getActiveCatalytic() : Altar.AIR));
 			int eta = s.getSecondsToNextPortal();
 			boolean portalBlocks = eta >= 0 && eta < craftSeconds + trip && room + craftable >= c.getPortalMinCapacity();
-			if (portalBlocks && close >= 0 && close < craftSeconds + trip + 5)
+			// The close estimate drifts: a run under way is not cut short for a close only just
+			// too near, and the checklist is not left for a close only just far enough.
+			int closeSlack = s.getLastStep() == Step.MINE_FRAGMENTS ? -5 : preppingForClose(s) ? 5 : 0;
+			if (portalBlocks && close >= 0 && close < craftSeconds + trip + 5 + closeSlack)
 			{
 				Instruction last = lastPortalOrTrip(s, c, essence, craftable, trip, close);
 				if (last != null)
@@ -615,9 +675,9 @@ public class Planner
 			if (s.isAnyPortalThisGame())
 			{
 				int remaining = room - fragments;
-				int mineSeconds = (int) Math.round(remaining / s.getFragmentsPerTick() * 0.6);
+				int slack = s.getLastStep() == Step.MINE_FRAGMENTS ? 5 : 0;
 				boolean portalTooSoon = s.getSecondsToNextPortal() >= 0
-					&& mineSeconds + craftSeconds + trip > s.getSecondsToNextPortal();
+					&& legSeconds(s, remaining) + craftOnlySeconds(s, craftable) + trip > s.getSecondsToNextPortal() + slack;
 				if (fragments >= room || (fragments >= c.getMinFragmentsToCraft() && portalTooSoon))
 				{
 					return craftEssence(s);
@@ -678,7 +738,10 @@ public class Planner
 		int eta = s.getSecondsToNextPortal();
 		if (eta >= 0)
 		{
-			for (int at = eta; at + PORTAL_VISIT_SECONDS < close; at += PORTAL_INTERVAL_SECONDS)
+			// Whether a portal still fits before the close moves the budget by a whole visit,
+			// and the close estimate drifts by seconds: lean towards the step under way.
+			int slack = preppingForClose(s) ? 10 : s.getLastStep() == Step.MINE_FRAGMENTS ? -10 : 0;
+			for (int at = eta; at + PORTAL_VISIT_SECONDS < close + slack; at += PORTAL_INTERVAL_SECONDS)
 			{
 				overhead += PORTAL_VISIT_SECONDS + trip;
 			}
@@ -713,7 +776,9 @@ public class Planner
 		int crafted = Math.min(fit, craftable);
 		if (essence + crafted > MIN_PRE_PORTAL_TRIP)
 		{
-			return crafted > 0 ? craftSome(s, crafted, "then go", "Portal in ~" + eta + "s") : null;
+			// A trip under way is not turned back for less than a real top-up.
+			int minWorth = s.getLastStep() == Step.GO_TO_ALTAR ? MIN_TOPUP : 1;
+			return crafted >= minWorth ? craftSome(s, crafted, "then go", "Portal in ~" + eta + "s") : null;
 		}
 		Instruction prep = graceResupply(s, eta + 30);
 		return prep != null ? prep : portalPrep(s, c, eta);
@@ -864,16 +929,32 @@ public class Planner
 			.target(Target.RUNIC_ALTAR).altar(altar).items(items).build();
 	}
 
-	private Instruction inHugeRemains(Snapshot s)
+	/**
+	 * Inside the huge remains. During a round the load is mined and taken out; between rounds
+	 * (the grace portal), or once this round's energy is maxed, it is mined for the next round
+	 * and the wait is spent inside. The one slot kept free is for the fragments mined while
+	 * the first altars are still closed.
+	 */
+	private Instruction inHugeRemains(Snapshot s, boolean betweenRounds)
 	{
-		// Reserve one inventory slot during the opening altar wait.
-		boolean noAltarYet = s.getActiveElemental() == null && s.getActiveCatalytic() == null;
-		if (noAltarYet && s.getFreeSlots() <= 1 && s.pouchSpace() == 0 && s.getFragments() == 0)
+		if (betweenRounds && s.hasStones() && s.getPhase() == GamePhase.CLOSING)
 		{
-			return Instruction.builder().step(Step.LEAVE_HUGE_REMAINS).headline("Leave through the portal")
-				.detail("").target(Target.PORTAL).build();
+			// The rifts stay open 30 s past the closing message: the stones can still go in.
+			return Instruction.builder().step(Step.LEAVE_HUGE_REMAINS).headline("Leave and hand in your stones")
+				.detail("The rifts are still open").target(Target.PORTAL).items(STONE_ITEMS).urgency(Urgency.HIGH).build();
 		}
-		if (s.capacity() > 0 && !s.energyCapped())
+		boolean stay = betweenRounds || graceTime(s);
+		Instruction done = stay
+			? Instruction.builder().step(Step.WAIT_FOR_PORTAL).headline("Wait inside for the next game")
+				.detail("").urgency(Urgency.INFO).build()
+			: Instruction.builder().step(Step.LEAVE_HUGE_REMAINS).headline("Leave through the portal")
+				.detail("").target(Target.PORTAL).build();
+		boolean noAltarYet = s.getActiveElemental() == null && s.getActiveCatalytic() == null;
+		if ((stay || noAltarYet) && s.getFreeSlots() <= 1 && s.pouchSpace() == 0 && s.getFragments() == 0)
+		{
+			return done;
+		}
+		if (s.capacity() > 0)
 		{
 			if (s.getFreeSlots() == 0 && s.pouchSpace() > 0)
 			{
@@ -883,8 +964,7 @@ public class Planner
 			return Instruction.builder().step(Step.MINE_HUGE_REMAINS).headline("Mine the huge remains")
 				.detail("").target(Target.HUGE_REMAINS).build();
 		}
-		return Instruction.builder().step(Step.LEAVE_HUGE_REMAINS).headline("Leave through the portal")
-			.detail("").target(Target.PORTAL).build();
+		return done;
 	}
 
 	private Instruction altarTrip(Snapshot s, PlannerSettings c, int essence)
@@ -1000,16 +1080,35 @@ public class Planner
 		{
 			return null;
 		}
-		int mineSeconds = (int) Math.round(remaining / s.getFragmentsPerTick() * 0.6);
-		int craftSeconds = (int) Math.round(Math.min(fragments, room) / s.getCraftPerTick() * 0.6);
+		int craftSeconds = craftOnlySeconds(s, Math.min(fragments, room));
 		int trip = (int) Math.round(AltarChooser.tripSeconds(s, s.getActiveCatalytic() != null ? s.getActiveCatalytic() : Altar.AIR));
+		// A run under way is not cut short for a portal that is only a few seconds too soon.
+		int slack = s.getLastStep() == Step.MINE_FRAGMENTS ? 5 : 0;
 		boolean portalTooSoon = s.getSecondsToNextPortal() >= 0
-			&& mineSeconds + craftSeconds + trip > s.getSecondsToNextPortal();
+			&& legSeconds(s, remaining) + craftSeconds + trip > s.getSecondsToNextPortal() + slack;
 		if (portalTooSoon && fragments >= c.getMinFragmentsToCraft())
 		{
 			return null;
 		}
 		return mineFragments(s, c, room);
+	}
+
+	/**
+	 * A leg to the remains for {@code remaining} fragments: the walk out, the mining and the
+	 * walk back to the bench from there. Measured from the remains rather than from here, the
+	 * sum holds steady along the walk out instead of growing with every step taken.
+	 */
+	private static int legSeconds(Snapshot s, int remaining)
+	{
+		Target remains = miningTarget(s, remaining);
+		double rate = remains == Target.LARGE_REMAINS ? s.getFragmentsPerTick() : s.getPartsPerTick();
+		return walkSeconds(s, remains, 15) + (int) Math.round(remaining / rate * 0.6) + returnSeconds(s, remains, 15);
+	}
+
+	// The bench work alone, with no walk: the walk is the leg's.
+	private static int craftOnlySeconds(Snapshot s, int craftable)
+	{
+		return (int) Math.round(craftable / s.getCraftPerTick() * 0.6);
 	}
 
 	// Keep crafting through close-time jitter; higher-priority interrupts still apply.
@@ -1292,37 +1391,45 @@ public class Planner
 		return nearest(s.getEmptyTiles(), s.getPlayerLocation());
 	}
 
+	/**
+	 * The barrier a cell should go on: the one below 60 %, else the lowest tier it can raise,
+	 * else the most damaged below 90 %. With nothing in real need the cell is a spare, and
+	 * goes on the nearest barrier rather than a far one; before the rumble only one close by.
+	 * A barrier with no health bar showing counts as full. Ties go to the nearer barrier.
+	 */
 	@Nullable
 	private BarrierState freshBarrierToTend(Snapshot s, PlannerSettings c, CellTier tier)
 	{
 		List<BarrierState> barriers = s.getBarriers();
 		BarrierState protectedBarrier = protectedBarrier(s, c);
+		WorldPoint me = s.getPlayerLocation();
 		BarrierState damaged = null;
 		BarrierState upgradable = null;
-		BarrierState unknown = null;
-		BarrierState any = null;
+		BarrierState nearest = null;
+		int nearestDistance = Integer.MAX_VALUE;
 		for (BarrierState barrier : barriers)
 		{
 			if (barrier == protectedBarrier)
 			{
 				continue;
 			}
-			if (any == null)
-			{
-				any = barrier;
-			}
+			int distance = me == null ? 0 : barrier.getLocation().distanceTo2D(me);
 			int hp = barrier.getHealthPercent();
-			if (hp >= 0 && hp < 100 && (damaged == null || hp < damaged.getHealthPercent()))
+			if (hp >= 0 && hp < NEEDS_CELL_PERCENT && (damaged == null || hp < damaged.getHealthPercent()
+				|| (hp == damaged.getHealthPercent() && distance < damaged.getLocation().distanceTo2D(me))))
 			{
 				damaged = barrier;
 			}
-			if (barrier.getTier().getRank() < tier.getRank() && (upgradable == null || barrier.getTier().getRank() < upgradable.getTier().getRank()))
+			int rank = barrier.getTier().getRank();
+			if (rank < tier.getRank() && (upgradable == null || rank < upgradable.getTier().getRank()
+				|| (rank == upgradable.getTier().getRank() && distance < upgradable.getLocation().distanceTo2D(me))))
 			{
 				upgradable = barrier;
 			}
-			if (hp < 0 && unknown == null)
+			if (distance < nearestDistance)
 			{
-				unknown = barrier;
+				nearestDistance = distance;
+				nearest = barrier;
 			}
 		}
 		if (damaged != null && damaged.getHealthPercent() < 60)
@@ -1337,15 +1444,9 @@ public class Planner
 		{
 			return damaged;
 		}
-		if (s.powerPercent() >= RUMBLE_PERCENT && unknown != null)
+		if (nearest != null && (s.powerPercent() >= RUMBLE_PERCENT || nearestDistance <= SPARE_CELL_TILES))
 		{
-			return unknown;
-		}
-		BarrierState spare = unknown != null ? unknown : any;
-		if (spare != null && s.getPlayerLocation() != null
-			&& spare.getLocation().distanceTo2D(s.getPlayerLocation()) <= SPARE_CELL_TILES)
-		{
-			return spare;
+			return nearest;
 		}
 		return null;
 	}

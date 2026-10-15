@@ -302,9 +302,6 @@ public class StateTracker
 	private boolean pointsCredited;
 
 	private final RateTracker rates = new RateTracker();
-	// What the player was seen doing on the last tick, for the game trace.
-	@Getter
-	private RateTracker.Activity lastActivity = RateTracker.Activity.NONE;
 	private int lastFragments;
 	private int lastEssence;
 	private int lastStones;
@@ -1325,18 +1322,6 @@ public class StateTracker
 			}
 		}
 		rates.tick(activity, fragDelta, essDelta);
-		lastActivity = activity;
-	}
-
-	/**
-	 * The HUD script's figures as last seen, in the order the trace records them (see
-	 * {@code GameTrace.HUD_ELEMENTAL} and the constants after it), ending with the tick they
-	 * were seen on, or -1 before any update.
-	 */
-	public int[] hudArgs()
-	{
-		return new int[]{hudElemental, hudCatalytic, hudPower, hudMaxPower, hudPortalLocation, hudElementalIndex,
-			hudCatalyticIndex, hudGuardians, hudGuardiansMax, hudGuardianTicks, hudPortalTicks, hudTick};
 	}
 
 	private static boolean near(WorldPoint at, @Nullable GameObject object, int tiles)

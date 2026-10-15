@@ -392,17 +392,4 @@ public interface GotrAutopilotConfig extends Config
 	{
 		return false;
 	}
-
-	@ConfigItem(
-		keyName = "calibrationTrace",
-		name = "Write game traces",
-		description = "Log each game tick by tick to .runelite/gotr-autopilot/traces,<br>"
-			+ "for measuring the real game against the simulator",
-		section = displaySection,
-		position = 11
-	)
-	default boolean calibrationTrace()
-	{
-		return false;
-	}
 }

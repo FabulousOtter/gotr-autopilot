@@ -11,7 +11,6 @@ GOTR Autopilot aims to make Guardians of the Rift as brain-off as possible, for 
 - A hint arrow and an optional notification when the step changes after a longer AFK stint.
 - Tells you when it's safe to exit after a game to avoid losing points.
 - Hides The Great Guardian when a cell is to be placed on a tile to avoid mis-clicks.
-- Optional per-game trace files (Write game traces, off by default) under `.runelite/gotr-autopilot/traces`, for measuring real games.
 
 ## Strategies
 

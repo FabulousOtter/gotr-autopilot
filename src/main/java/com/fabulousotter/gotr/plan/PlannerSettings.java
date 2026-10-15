@@ -36,6 +36,7 @@ public class PlannerSettings
 	Strategy strategy = Strategy.GENERAL;
 	@Builder.Default
 	int openingFragmentTarget = 120;
+	// Seconds before the first altars open at which the solo and general opening run stops to craft.
 	@Builder.Default
 	int craftWindowSeconds = 50;
 	@Builder.Default

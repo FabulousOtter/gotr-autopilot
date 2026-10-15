@@ -496,7 +496,8 @@ public class Planner
 		{
 			return portalWait;
 		}
-		return mineFragments(s, c, s.isAnyPortalThisGame() ? s.capacity() : c.getOpeningFragmentTarget());
+		// The opening run is the configured size; with the altars open a run is a load.
+		return mineFragments(s, c, s.isAnyPortalThisGame() || altarsOpen(s) ? s.capacity() : c.getOpeningFragmentTarget());
 	}
 
 	private Instruction massPlan(Snapshot s, PlannerSettings c)
@@ -661,19 +662,29 @@ public class Planner
 				}
 				return craftSome(s, Math.min(affordable, craftable), "then go", "Rift closes in ~" + close + "s");
 			}
-			int rot = s.getAltarSecondsRemaining();
-			// Craft for the next altars once they are within the craft window, but no earlier
-			// than the load needs: with the pouches already full, a short craft can wait. The
-			// opening run is the exception: it mines to its target whatever the altar clock says.
-			boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8
-				&& !massOpeningRun(s, c);
-			if (!s.isAnyPortalThisGame() && (fragments >= c.getOpeningFragmentTarget()
-				|| (windowOpen && fragments >= c.getMinFragmentsToCraft())))
+			if (massOpeningRun(s, c))
 			{
-				return craftEssence(s);
+				// The opening run mines to its target whatever the altar clock says.
+				if (fragments >= c.getOpeningFragmentTarget())
+				{
+					return craftEssence(s);
+				}
 			}
-			if (s.isAnyPortalThisGame())
+			else if (!altarsOpen(s) && !s.isAnyPortalThisGame())
 			{
+				// Before the first altars open: craft once they are within the craft window, but
+				// no earlier than the load needs: with the pouches already full, a short craft can wait.
+				int rot = s.getAltarSecondsRemaining();
+				boolean windowOpen = rot >= 0 && rot <= c.getCraftWindowSeconds() && rot <= craftSeconds + 8;
+				if (fragments >= c.getOpeningFragmentTarget() || (windowOpen && fragments >= c.getMinFragmentsToCraft()))
+				{
+					return craftEssence(s);
+				}
+			}
+			else
+			{
+				// With the altars open a run is a full load: they change every 20 s, so there is
+				// no pair to craft in time for, and the run is cut short only for the portal.
 				int remaining = room - fragments;
 				int slack = s.getLastStep() == Step.MINE_FRAGMENTS ? 5 : 0;
 				boolean portalTooSoon = s.getSecondsToNextPortal() >= 0
@@ -996,10 +1007,15 @@ public class Planner
 			.items(choice.isViaTalisman() ? ImmutableSet.of(choice.getAltar().getTalismanItemId()) : ImmutableSet.of()).build();
 	}
 
+	/**
+	 * Solo and general: the opening run, mined to its target or cut at the craft window before
+	 * the first altars open, to be crafting as they do. Once they are open a run is sized to
+	 * the load instead (see {@link #midGameMine}).
+	 */
 	@Nullable
 	private Instruction openingMine(Snapshot s, PlannerSettings c)
 	{
-		if (s.isAnyPortalThisGame() || s.getEssence() > 0)
+		if (s.isAnyPortalThisGame() || altarsOpen(s) || s.getEssence() > 0)
 		{
 			return null;
 		}
@@ -1055,6 +1071,12 @@ public class Planner
 		return s.isAnyPortalThisGame() || s.isAltarVisitedThisGame();
 	}
 
+	// The first altars have opened: from here the altar countdown runs to the next pair, 20 s away at most.
+	private static boolean altarsOpen(Snapshot s)
+	{
+		return s.getActiveElemental() != null || s.getActiveCatalytic() != null;
+	}
+
 	/**
 	 * Mass: mining the opening load, with no essence made yet and short of the opening target.
 	 * It runs to its target whatever the altar clock says, as mass worlds open with one long
@@ -1066,10 +1088,15 @@ public class Planner
 		return !pastOpening(s) && s.essenceTotal() == 0 && s.getFragments() < c.getOpeningFragmentTarget();
 	}
 
+	/**
+	 * Solo and general, with the altars open: a run is a full load, as the altars change every
+	 * 20 s and there is no pair to craft in time for. It is cut short only for a portal the
+	 * rest of it would miss, once there is a load worth crafting.
+	 */
 	@Nullable
 	private Instruction midGameMine(Snapshot s, PlannerSettings c)
 	{
-		if (!s.isAnyPortalThisGame())
+		if (!s.isAnyPortalThisGame() && !altarsOpen(s))
 		{
 			return null;
 		}
@@ -1178,7 +1205,7 @@ public class Planner
 		{
 			return waitInCentre(rot);
 		}
-		int target = s.isAnyPortalThisGame() ? s.getFragments() + c.getMinFragmentsToCraft()
+		int target = s.isAnyPortalThisGame() || altarsOpen(s) ? s.getFragments() + c.getMinFragmentsToCraft()
 			: Math.max(s.getFragments() + c.getMinFragmentsToCraft(), c.getOpeningFragmentTarget());
 		Target remains = miningTarget(s, target - s.getFragments());
 		if (remains == Target.LARGE_REMAINS && rot >= 0 && rot <= 2 * walkSeconds(s, Target.LARGE_REMAINS, 15) + 10)

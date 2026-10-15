@@ -90,9 +90,10 @@ public interface GotrAutopilotConfig extends Config
 	@ConfigItem(
 		keyName = "craftWindow",
 		name = "Craft window (s)",
-		description = "Stop mining and craft essence this many seconds<br>"
-			+ "before the altars change. In the Mass strategy<br>"
-			+ "the opening run always mines to its target",
+		description = "In the opening, stop mining and craft essence this<br>"
+			+ "many seconds before the first altars open; later runs<br>"
+			+ "mine a full load. In the Mass strategy the opening<br>"
+			+ "run always mines to its target",
 		section = strategySection,
 		position = 2
 	)
